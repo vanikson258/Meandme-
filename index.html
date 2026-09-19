@@ -821,6 +821,14 @@ function feelingPicker(path, rootPath){
   }
   return html;
 }
+/* Нужно ли перерисовать шаг: появился или пропал вопрос «что было под этим». */
+function feelingBlockChanged(path){
+  const sel = get(draft, path) || [];
+  const shouldShow = sel.some(v => SECONDARY.indexOf(v) >= 0);
+  const rootPath = (path === "b1.feelings") ? "b1.primaryRoot" : "b3.primaryRoot";
+  const isShown = !!document.querySelector('[data-radio="' + rootPath + '"]');
+  return shouldShow !== isShown;
+}
 function slider(path, label){
   const v = get(draft, path); const val = (v==null ? 5 : v);
   return '<div class="stack-s">' +
@@ -1418,8 +1426,14 @@ function screenSettings(){
    РЕНДЕР И НАВИГАЦИЯ
    ============================================================ */
 const TITLES = { home:"Я с собой", wizard:"Протокол", diary:"Дневник", entry:"Запись", tools:"Практики", tool:"", progress:"Прогресс", settings:"Настройки" };
+let lastRenderKey = "";
 function render(){
   clearTimers(); breathState = null;
+  // Тот же экран — остаёмся на месте; новый — открываем сверху.
+  const key = view.name + "|" + (view.param || "") + "|" + stepIdx;
+  const keepScroll = (key === lastRenderKey);
+  const prevY = window.scrollY;
+  lastRenderKey = key;
   const root = document.getElementById("root");
   let html = "";
   if(view.name === "home") html = screenHome();
@@ -1441,7 +1455,7 @@ function render(){
   document.querySelectorAll(".nav button").forEach(b=>{
     if(b.dataset.tab === view.tab) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current");
   });
-  window.scrollTo(0,0);
+  window.scrollTo(0, keepScroll ? prevY : 0);
   if(view.name === "tool" && view.param === "urge") wireUrgeTimer();
   syncTG();
 }
@@ -1637,14 +1651,29 @@ document.addEventListener("click", (ev)=>{
   }
   if(t.dataset.chips){
     if(!draft) return;
-    toggleIn(draft, t.dataset.chips, t.dataset.val);
-    dirty = true; haptic("select"); render(); return;
+    const arr = toggleIn(draft, t.dataset.chips, t.dataset.val);
+    dirty = true; haptic("select");
+    // Меняем только нажатую кнопку — иначе страница перерисуется и прокрутка уедет наверх.
+    t.setAttribute("aria-pressed", String(arr.indexOf(t.dataset.val) >= 0));
+    // Исключение: выбор чувства может открыть или убрать вопрос о первичном чувстве.
+    if(t.dataset.chips === "b1.feelings" || t.dataset.chips === "b3.feelings"){
+      if(feelingBlockChanged(t.dataset.chips)) render();
+    }
+    return;
   }
   if(t.dataset.radio){
     if(!draft) return;
-    const cur = get(draft, t.dataset.radio);
-    set(draft, t.dataset.radio, cur === t.dataset.val ? "" : t.dataset.val);
-    dirty = true; render(); return;
+    const path = t.dataset.radio;
+    const cur = get(draft, path);
+    const next = cur === t.dataset.val ? "" : t.dataset.val;
+    set(draft, path, next);
+    dirty = true; haptic("select");
+    // 2.12 меняет набор полей целиком — только здесь нужна перерисовка.
+    if(path === "b3.acted"){ render(); return; }
+    document.querySelectorAll("[data-radio]").forEach(b=>{
+      if(b.dataset.radio === path) b.setAttribute("aria-pressed", String(b.dataset.val === next));
+    });
+    return;
   }
   if(t.dataset.wiz === "next"){ haptic("light"); return wizNext(); }
   if(t.dataset.wiz === "prev"){ if(stepIdx>0){ stepIdx--; render(); } return; }
