@@ -228,12 +228,12 @@ input,textarea,select{font:inherit; color:inherit}
 .chip.b2[aria-pressed="true"]{background:var(--b2-soft); border-color:var(--b2); color:var(--b2)}
 .chip.sec[aria-pressed="true"]{background:var(--warn-soft); border-color:var(--warn); color:var(--warn)}
 
-textarea, input[type="text"]{
+textarea, input[type="text"], input[type="number"]{
   width:100%; background:var(--surface-2); border:1px solid var(--line);
   border-radius:var(--r-m); padding:12px 14px; resize:vertical; line-height:1.55;
   transition:border-color .15s, background .15s;
 }
-textarea:focus, input[type="text"]:focus{border-color:var(--blue); background:var(--surface); outline:none}
+textarea:focus, input[type="text"]:focus, input[type="number"]:focus{border-color:var(--blue); background:var(--surface); outline:none}
 textarea::placeholder, input::placeholder{color:var(--muted); opacity:.75}
 textarea{min-height:82px}
 label.field{display:block}
@@ -478,6 +478,26 @@ label.field > span{display:block; font-size:13.5px; font-weight:600; color:var(-
 .sheet textarea{min-height:110px; font-size:13px}
 .btn-danger{background:var(--danger); color:var(--surface)}
 
+/* карточка дня */
+.emo-row{display:flex; align-items:center; gap:10px; padding:7px 0}
+.emo-n{font-size:14px; color:var(--ink-2); flex:1; min-width:0}
+.lv{display:flex; gap:4px; flex:none}
+.lv-b{
+  width:31px; height:31px; border-radius:9px; font-size:13px; font-weight:600;
+  background:var(--surface-2); border:1px solid var(--line); color:var(--muted);
+  transition:background .12s, color .12s, border-color .12s;
+}
+.lv-b[aria-pressed="true"]{background:var(--blue); border-color:var(--blue); color:#fff}
+:root[data-theme="dark"] .lv-b[aria-pressed="true"]{color:#08131D}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .lv-b[aria-pressed="true"]{color:#08131D} }
+@media (max-width:360px){ .lv-b{width:27px; height:27px; font-size:12px} }
+
+.day-row{display:flex; align-items:center; gap:3px}
+.day-cell{flex:1; height:30px; border-radius:6px; background:var(--surface-3); position:relative}
+.day-cell.on{background:var(--blue)}
+.heat{display:flex; gap:3px}
+.heat i{flex:1; height:26px; border-radius:6px; display:block}
+
 .empty{text-align:center; padding:40px 20px; color:var(--muted)}
 .empty svg{width:40px; height:40px; stroke:var(--line-2); fill:none; stroke-width:1.4; margin-bottom:12px}
 
@@ -612,14 +632,21 @@ let Adapter = (TG && TG.CloudStorage && tgAtLeast("6.9")) ? CloudAdapter : Local
 
 /* ---------- СОСТОЯНИЕ ---------- */
 const DEFAULTS = {
-  settings:{ gender:"f", prayer:true, childName:"", anchors:[], returns:[] },
+  settings:{ gender:"f", prayer:true, childName:"", anchors:[], returns:[], name:"", age:"", onboarded:false },
   entries:[],
+  days:{},                                              // карточки дня: "2026-09-21" -> {...}
+  support:{ signs:[], helps:[], people:[], reasons:"" },// карточка поддержки
   seeded:false
 };
+function dayKey(d){
+  const x = d || new Date();
+  return x.getFullYear() + "-" + String(x.getMonth()+1).padStart(2,"0") + "-" + String(x.getDate()).padStart(2,"0");
+}
 let DB = JSON.parse(JSON.stringify(DEFAULTS));
 let view = { name:"home", param:null, tab:"home" };
 let draft = null;
 let dirty = false;
+let diaryTab = "entries";
 let stepIdx = 0;
 let timers = [];
 
@@ -701,6 +728,83 @@ const RETURNS = ["Стакан воды","Выйти на улицу на 5–10
 const BODY_AFTER = ["лёгкость","тепло","расслабление","дыхание ровнее","спокойствие","дрожь ушла","ком растворился","тяжесть осталась","тянущая боль","пустота","слёзы вышли","сонливость"];
 const KIND_SELF = ["Сказать себе спасибо","Тёплый душ","Чай и тишина","Лечь пораньше","Прогулка","Музыка","Полчаса ничего не делать","Записать, что справил(а)ся"];
 const KIND_OTHERS = ["Сказать тёплое слово","Спросить, как он(а)","Поблагодарить","Сделать маленькое дело для другого","Извиниться, если было за что"];
+/* ---- карточка дня ---- */
+const DAY_EMOTIONS = [
+  {k:"anx", n:"Тревога"}, {k:"sad", n:"Печаль"}, {k:"ang", n:"Злость"},
+  {k:"shm", n:"Стыд"}, {k:"lon", n:"Одиночество"}, {k:"joy", n:"Радость"}
+];
+const DAY_SKILLS = [
+  "Пауза перед реакцией","Дыхание","Заземление","Противоположное действие",
+  "Серфинг импульса","Попросил(а) словами","Факты и интерпретация","Самоуспокоение",
+  "Радикальное принятие","Разговор с ребёнком","Прошёл(а) протокол"
+];
+const DAY_URGES = ["написать или позвонить","наорать, обвинить","замолчать, уйти","проверять соцсети","закурить","выпить","переесть","залипнуть в телефон","работать до упаду"];
+
+/* ---- межличностная эффективность ---- */
+const DEARMAN = [
+  {t:"Опиши факты", d:"Только события, без оценок и без «ты всегда». «Вчера я написала днём, ответ пришёл вечером».", e:"D — Describe"},
+  {t:"Вырази чувство", d:"От «я», одним предложением. «Мне было тревожно и одиноко».", e:"E — Express"},
+  {t:"Попроси прямо", d:"Конкретно и выполнимо. Не «будь внимательнее», а «напиши хотя бы одно слово, если занят».", e:"A — Assert"},
+  {t:"Назови, что это даст", d:"Что изменится для вас обоих. «Мне будет спокойнее, и я не буду дёргать тебя весь день».", e:"R — Reinforce"},
+  {t:"Держись темы", d:"Возвращайся к своей просьбе. Не давай разговору уехать в старые обиды.", e:"M — Mindful"},
+  {t:"Спокойный тон", d:"Ровный голос, прямой взгляд. Без оправданий, без угроз, без слёз как аргумента.", e:"A — Appear confident"},
+  {t:"Будь готов(а) к встрече", d:"Спроси: «а как было бы удобно тебе?». Просьба — это разговор, а не ультиматум.", e:"N — Negotiate"}
+];
+const GIVE = [
+  {t:"Мягкость", d:"Без нападения, угроз и обесценивания. Даже если внутри буря."},
+  {t:"Интерес", d:"Слушай ответ до конца, не перебивай, не готовь возражение заранее."},
+  {t:"Признание его стороны", d:"«Я понимаю, что у тебя был тяжёлый день» — до того, как скажешь своё."},
+  {t:"Лёгкость", d:"Немного тепла и юмора. Разговор не обязан быть допросом."}
+];
+const FAST = [
+  {t:"Справедливо", d:"К себе тоже. Твоя потребность — не каприз, которую надо оправдывать."},
+  {t:"Без лишних извинений", d:"Не извиняйся за то, что у тебя есть просьба, что ты существуешь, что занимаешь место."},
+  {t:"Верность себе", d:"Не отказывайся от важного ради того, чтобы точно не бросили."},
+  {t:"Правдиво", d:"Без преувеличений, без «ты никогда» и без выдуманной беспомощности, чтобы разжалобить."}
+];
+
+/* ---- остальные навыки ДБТ ---- */
+const ACCEPTS = [
+  {t:"Занятие", d:"Руки заняты — голова отпускает: посуда, уборка, прогулка, игра."},
+  {t:"Вклад", d:"Сделать что-то для другого: написать тёплое, помочь, поблагодарить."},
+  {t:"Сравнение", d:"Вспомни время, когда было тяжелее, и ты это прошёл(ла). Не чтобы обесценить сейчас, а чтобы вспомнить, что проходит."},
+  {t:"Другая эмоция", d:"Смешное видео, музыка на громкости, фильм. Эмоция вытесняет эмоцию."},
+  {t:"Отложить", d:"Мысленно убрать ситуацию в коробку и поставить на полку. Вернёшься к ней через час — она никуда не денется."},
+  {t:"Другие мысли", d:"Счёт от 100 назад по семь, перечислить города, вспомнить текст песни."},
+  {t:"Ощущение", d:"Растереть ладони, крепко обнять себя, тёплый душ, сжать подушку."}
+];
+const SOOTHE = [
+  {t:"Зрение", d:"Небо, фотографии, окно, свеча, что-то красивое в комнате."},
+  {t:"Слух", d:"Спокойная музыка, дождь, тишина без телефона."},
+  {t:"Запах", d:"Кофе, мята, эфирное масло, чистое бельё."},
+  {t:"Вкус", d:"Тёплый чай маленькими глотками, что-то любимое — медленно, замечая вкус."},
+  {t:"Прикосновение", d:"Плед, тёплый душ, мягкая ткань, ладонь на груди."}
+];
+const PLEASE = [
+  {t:"Лечить, что болит", d:"Невылеченное тело делает эмоции резче. Дойти до врача — это тоже навык регуляции."},
+  {t:"Есть регулярно", d:"Голод усиливает тревогу и раздражительность. Не пропускать приёмы пищи."},
+  {t:"Без веществ, меняющих состояние", d:"Алкоголь на следующий день возвращает тревогу вдвойне."},
+  {t:"Спать", d:"Недосып — самый частый усилитель срывов. Ложиться примерно в одно время."},
+  {t:"Двигаться", d:"Регулярная нагрузка — не про форму, а про то, чтобы адреналину было куда деваться."}
+];
+const RADICAL = [
+  "Реальность такова, какая есть. Спор с фактом не меняет факт.",
+  "У всего, что произошло, были свои причины — даже если они несправедливы.",
+  "Боль неизбежна. Страдание — это боль плюс сопротивление ей.",
+  "Принять не значит одобрить. Принять значит перестать тратить силы на «этого не должно было быть».",
+  "Принятие — не одно решение, а много раз подряд. Придётся возвращаться к нему снова."
+];
+const MINDFUL_WHAT = [
+  {t:"Наблюдать", d:"Замечать, что происходит внутри и снаружи, ничего не делая с этим. Мысль пришла — отметил, что пришла мысль."},
+  {t:"Описывать", d:"Называть словами и только факты: «у меня сжалось в груди», а не «мне плохо, потому что я никому не нужна»."},
+  {t:"Участвовать", d:"Быть целиком в том, что делаешь сейчас, не наблюдая себя со стороны."}
+];
+const MINDFUL_HOW = [
+  {t:"Безоценочно", d:"Без «хорошо» и «плохо», без «я опять всё испортила». Просто что есть."},
+  {t:"Одно за раз", d:"Одно дело, одна мысль. Не разбирать отношения, пока моешь посуду."},
+  {t:"Эффективно", d:"Делать то, что работает, а не то, что «справедливо» или «должно быть»."}
+];
+
 const DISTORTIONS = [
   {n:"Чтение мыслей", ex:"«Он молчит — значит, я надоела»", q:"Какие есть доказательства, что он думает именно это? Какие ещё бывают причины молчать?"},
   {n:"Предсказание будущего", ex:"«Он точно уйдёт»", q:"Это факт или прогноз? Сколько раз такой прогноз не сбывался?"},
@@ -1032,9 +1136,11 @@ function stopBreath(){
 function screenHome(){
   const es = DB.entries.filter(e=>!e.isExample);
   const last = DB.entries[0];
-  const d = new Date(), h = d.getHours();
-  const greet = h < 5 ? "Ночь" : h < 12 ? "Утро" : h < 18 ? "День" : "Вечер";
+  const h = new Date().getHours();
+  const greet = h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : "Добрый вечер";
+  const nm = (DB.settings.name || "").trim();
   let html = '<div class="stack" style="padding-top:6px">' +
+    (nm ? '<p class="eyebrow" style="margin:2px 2px 0">' + esc(greet) + ", " + esc(nm) + '</p>' : "") +
     '<div class="hero"><h2>' + esc(T.anchor) + '</h2>' +
     '<p>Когда накрывает — не решай ничего. Сначала пауза, потом разбор.</p>' +
     '<button class="btn btn-lg" data-go="wizard">Пройти протокол</button></div>' +
@@ -1044,8 +1150,22 @@ function screenHome(){
     '<button data-tool="breath"><b>Дыхание 4-8</b><span>Две минуты, и накал падает</span></button>' +
     '<button data-tool="ground"><b>Заземление</b><span>Стопы, таз, 5 опор</span></button>' +
     '<button data-tool="urge"><b>Серфинг импульса</b><span>Переждать волну, не сделав</span></button>' +
+    '<button data-tool="ask"><b>Попросить словами</b><span>Вместо шквала сообщений</span></button>' +
     '<button data-tool="anchor"><b>Фраза-якорь</b><span>Прочитать вслух</span></button>' +
+    '<button data-go="support"><b>Карточка поддержки</b><span>То, что ты написал себе сам</span></button>' +
     '</div>';
+
+  // карточка дня
+  const tc = todayCard();
+  html += '<p class="sect-title">День</p>' +
+    (tc
+      ? '<button class="entry" data-day="' + dayKey() + '"><div class="row">' +
+        '<span class="pill ok">день отмечен</span><span style="flex:1"></span>' +
+        '<span class="tiny">изменить</span></div>' +
+        '<p class="sub">' + esc(dayLine(tc)) + '</p></button>'
+      : '<button class="entry" data-day="' + dayKey() + '"><div class="row">' +
+        '<span class="eyebrow">Отметить сегодняшний день</span></div>' +
+        '<p class="sub">Полминуты: чувства по шкале, импульсы и что помогло. Через пару недель станет видно, что повторяется.</p></button>');
 
   if(last){
     const dl = (last.intensityBefore ?? 0) - (last.intensityAfter ?? 0);
@@ -1112,13 +1232,44 @@ function screenWizard(){
   return html;
 }
 
+function diaryTabs(){
+  return '<div class="seg-ctl" style="margin:8px 0 2px">' +
+    '<button data-dtab="entries" aria-pressed="' + (diaryTab==="entries") + '">Разборы</button>' +
+    '<button data-dtab="days" aria-pressed="' + (diaryTab==="days") + '">Дни</button></div>';
+}
+function screenDays(){
+  const keys = Object.keys(DB.days).sort().reverse();
+  let h = '<div class="stack" style="padding-top:4px">' + diaryTabs() +
+    (DB.days[dayKey()] ? "" : '<button class="btn btn-primary btn-block" data-day="' + dayKey() + '">Отметить сегодняшний день</button>');
+  if(!keys.length){
+    h += '<div class="empty"><p>Отмеченных дней пока нет.</p>' +
+      '<p class="tiny" style="margin-top:6px">Карточка дня занимает полминуты и показывает то, чего не видно по отдельным разборам: как меняется общий фон.</p></div>';
+  } else {
+    h += keys.map(k=>{
+      const d = DB.days[k], p = k.split("-");
+      const top = DAY_EMOTIONS.map(e=>({n:e.n, v:(d.emotions||{})[e.k]||0})).filter(x=>x.v>0).sort((a,b)=> b.v-a.v).slice(0,3);
+      return '<button class="entry" data-day="' + esc(k) + '">' +
+        '<div class="row"><span class="tiny">' + (+p[2]) + " " + MONTHS[+p[1]-1] + '</span>' +
+        (d.acted === "held" ? '<span class="pill ok">' + g("удержалась","удержался") + '</span>' : "") +
+        (d.acted === "did" ? '<span class="pill warn">было действие</span>' : "") +
+        '<span style="flex:1"></span>' +
+        ((d.skills||[]).length ? '<span class="tiny">навыков: ' + d.skills.length + '</span>' : "") + '</div>' +
+        (top.length ? '<div class="chips">' + top.map(x=>
+          '<span class="chip" style="pointer-events:none; padding:4px 10px; font-size:12px">' + esc(x.n) + ' ' + x.v + '</span>').join("") + '</div>' : "") +
+        (d.note ? '<p class="sub">' + esc(d.note) + '</p>' : "") + '</button>';
+    }).join("");
+  }
+  return h + '</div>';
+}
 function screenDiary(){
+  if(diaryTab === "days") return screenDays();
   if(!DB.entries.length){
-    return '<div class="empty"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v14.5"/><path d="M6.5 16H20v3.5a1.5 1.5 0 0 1-1.5 1.5h-12A2.5 2.5 0 0 1 4 18.5v-13"/></svg>' +
-      '<p>Дневник пока пуст.</p><p class="tiny" style="margin-top:6px">Каждая запись — это раз, когда ты не убежал(а) от себя.</p>' +
+    return '<div class="stack" style="padding-top:4px">' + diaryTabs() + '</div>' +
+      '<div class="empty"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v14.5"/><path d="M6.5 16H20v3.5a1.5 1.5 0 0 1-1.5 1.5h-12A2.5 2.5 0 0 1 4 18.5v-13"/></svg>' +
+      '<p>Разборов пока нет.</p><p class="tiny" style="margin-top:6px">Каждая запись — это раз, когда ты не убежал(а) от себя.</p>' +
       '<button class="btn btn-primary" data-go="wizard" style="margin-top:18px">Пройти протокол</button></div>';
   }
-  return '<div class="stack" style="padding-top:8px">' + DB.entries.map(e=>{
+  return '<div class="stack" style="padding-top:4px">' + diaryTabs() + DB.entries.map(e=>{
     const dl = (e.intensityBefore ?? 0) - (e.intensityAfter ?? 0);
     const fl = (get(e,"b1.feelings")||[]).slice(0,4);
     return '<button class="entry" data-entry="' + esc(e.id) + '">' +
@@ -1184,6 +1335,101 @@ function screenEntry(id){
   return h;
 }
 
+/* ---------- КАРТОЧКА ДНЯ ---------- */
+let dayDraft = null;
+function blankDay(){ return { emotions:{}, urges:[], acted:"", skills:[], note:"" }; }
+function todayCard(){ return DB.days[dayKey()] || null; }
+function dayLine(d){
+  const top = DAY_EMOTIONS.map(e=>({n:e.n, v:(d.emotions||{})[e.k]||0})).sort((a,b)=> b.v-a.v)[0];
+  const parts = [];
+  if(top && top.v) parts.push(top.n.toLowerCase() + " " + top.v + " из 5");
+  if((d.skills||[]).length) parts.push("навыков: " + d.skills.length);
+  if(d.acted === "held") parts.push(g("удержалась","удержался"));
+  return parts.length ? parts.join(" · ") : "Отмечено";
+}
+function screenDaily(){
+  const key = view.param || dayKey();
+  if(!dayDraft) dayDraft = JSON.parse(JSON.stringify(DB.days[key] || blankDay()));
+  const d = dayDraft;
+  const isToday = key === dayKey();
+  const parts = key.split("-");
+  const dateLabel = isToday ? "Сегодня" : (+parts[2]) + " " + MONTHS[+parts[1]-1];
+
+  const scale = (k)=> '<div class="lv">' + [0,1,2,3,4,5].map(n =>
+    '<button class="lv-b" data-emo="' + k + '" data-val="' + n + '" aria-pressed="' + (d.emotions[k] === n) + '">' + n + '</button>'
+  ).join("") + '</div>';
+
+  return '<div class="stack" style="padding-top:8px">' +
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">' + esc(dateLabel) +
+    '. Отметь по шкале от 0 до 5, насколько сильным было каждое чувство за день. Это занимает полминуты и через пару недель показывает закономерности, которые изнутри не видно.</p></div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:12px">Чувства за день</p>' +
+    DAY_EMOTIONS.map(e =>
+      '<div class="emo-row"><span class="emo-n">' + esc(e.n) + '</span>' + scale(e.k) + '</div>'
+    ).join("") + '</div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:6px">Импульсы</p>' +
+    '<p class="tiny" style="margin-bottom:10px">Что тянуло сделать сегодня</p>' +
+    '<div class="chips">' + DAY_URGES.map(v =>
+      '<button class="chip b1" data-dchips="urges" data-val="' + esc(v) + '" aria-pressed="' + ((d.urges||[]).indexOf(v)>=0) + '">' + esc(v) + '</button>'
+    ).join("") + '</div>' +
+    ((d.urges||[]).length ? '<div style="margin-top:14px"><p class="eyebrow" style="margin-bottom:8px">И что с ними было</p>' +
+      '<div class="seg-ctl">' +
+      '<button data-dset="acted" data-val="held" aria-pressed="' + (d.acted==="held") + '">Удержался</button>' +
+      '<button data-dset="acted" data-val="part" aria-pressed="' + (d.acted==="part") + '">Частично</button>' +
+      '<button data-dset="acted" data-val="did" aria-pressed="' + (d.acted==="did") + '">Сделал</button>' +
+      '</div></div>' : "") + '</div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Что я применил(а)</p>' +
+    '<div class="chips">' + DAY_SKILLS.map(v =>
+      '<button class="chip b2" data-dchips="skills" data-val="' + esc(v) + '" aria-pressed="' + ((d.skills||[]).indexOf(v)>=0) + '">' + esc(v) + '</button>'
+    ).join("") + '</div></div>' +
+
+    '<label class="field"><span>Одной строкой про день</span>' +
+    '<textarea id="day-note" data-dnote placeholder="Что было главным сегодня" style="min-height:64px">' + esc(d.note||"") + '</textarea></label>' +
+
+    '<button class="btn btn-primary btn-block btn-lg" data-dsave="' + esc(key) + '">Сохранить день</button>' +
+    (DB.days[key] ? '<button class="btn btn-ghost btn-block" data-ddel="' + esc(key) + '" style="border:none; color:var(--muted); font-weight:500">Удалить отметку за этот день</button>' : "") +
+    '</div>';
+}
+
+/* ---------- КАРТОЧКА ПОДДЕРЖКИ ---------- */
+function listEditor(field, placeholder, items){
+  return (items.length ? '<div class="stack-s" style="margin-bottom:10px">' + items.map((v,i)=>
+      '<div class="row" style="gap:8px; align-items:flex-start">' +
+      '<span class="sub" style="flex:1">' + esc(v) + '</span>' +
+      '<button class="linkish" data-suprm="' + field + '" data-i="' + i + '" style="color:var(--danger); flex:none">убрать</button></div>'
+    ).join("") + '</div>' : "") +
+    '<div class="row" style="gap:8px"><input type="text" id="sup-' + field + '" placeholder="' + esc(placeholder) + '">' +
+    '<button class="btn" data-supadd="' + field + '" style="flex:none">Добавить</button></div>';
+}
+function screenSupport(){
+  const s = DB.support;
+  return '<div class="stack" style="padding-top:8px">' +
+    '<div class="card flat" style="background:var(--blue-tint)"><p class="sub">Заполни это заранее, в спокойный день. В плохой момент думать не получается — а тут уже будет готовый ответ, написанный тобой же.</p></div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:6px">1 · Как я понимаю, что начинается</p>' +
+    '<p class="tiny" style="margin-bottom:10px">Первые признаки, по которым видно, что накрывает — до того, как станет совсем тяжело.</p>' +
+    listEditor("signs", "Например: перечитываю переписку по кругу", s.signs) + '</div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:6px">2 · Что мне правда помогает</p>' +
+    '<p class="tiny" style="margin-bottom:10px">Только проверенное на себе, а не то, что должно помогать.</p>' +
+    listEditor("helps", "Например: выйти на улицу и дойти до реки", s.helps) + '</div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:6px">3 · Кому я могу написать</p>' +
+    '<p class="tiny" style="margin-bottom:10px">Люди, рядом с которыми становится легче. Имя и как связаться.</p>' +
+    listEditor("people", "Например: сестра, позвонить", s.people) + '</div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:6px">4 · Ради чего стоит переждать</p>' +
+    '<p class="tiny" style="margin-bottom:10px">То, что держит. Люди, планы, обещания себе.</p>' +
+    '<textarea id="sup-reasons" data-supreasons placeholder="Что для меня важно и никуда не денется, когда волна пройдёт">' + esc(s.reasons||"") + '</textarea></div>' +
+
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Если становится невыносимо и своими силами не справиться — это не слабость и не повод ждать. Скажи близкому человеку прямо сейчас или обратись к специалисту. В острой ситуации — служба экстренной психологической помощи в твоём городе или 112.</p>' +
+    (parseInt(DB.settings.age, 10) > 0 && parseInt(DB.settings.age, 10) < 18
+      ? '<p class="sub" style="margin-top:10px">И отдельно: тебе ещё нет восемнадцати. Пусть в списке выше обязательно будет взрослый, которому ты доверяешь. Нести такое в одиночку не нужно и не надо.</p>' : "") +
+    '</div></div>';
+}
+
 /* ---------- ПРАКТИКИ ---------- */
 const TOOLS = [
   {id:"breath", t:"Дыхание 4-6 и 4-8", s:"Выдох длиннее вдоха — тело выходит из тревоги", ic:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>'},
@@ -1194,6 +1440,13 @@ const TOOLS = [
   {id:"feelings", t:"Таблица чувств", s:"Первичные и вторичные, и что под ними", ic:'<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>'},
   {id:"distortions", t:"Ловушки мышления", s:"12 искажений и вопрос к каждому", ic:'<path d="M9.7 17h4.6M12 3a6 6 0 0 1 3.5 10.9c-.6.4-.9 1-.9 1.7v.4H9.4v-.4c0-.7-.3-1.3-.9-1.7A6 6 0 0 1 12 3z"/>'},
   {id:"opposite", t:"Противоположное действие", s:"Что делать вместо импульса", ic:'<path d="M7 7h10l-3-3M17 17H7l3 3"/>'},
+  {id:"ask", t:"Попросить словами", s:"Как сказать о нужном вместо шквала сообщений", ic:'<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.6-.7L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z"/>'},
+  {id:"wise", t:"Мудрый разум", s:"Между «чувствую» и «рассуждаю»", ic:'<path d="M12 3a6 6 0 0 1 3.5 10.9c-.6.4-.9 1-.9 1.7v.4H9.4v-.4c0-.7-.3-1.3-.9-1.7A6 6 0 0 1 12 3z"/><path d="M9.7 19h4.6"/>'},
+  {id:"mindful", t:"Осознанность", s:"Наблюдать, описывать, участвовать", ic:'<circle cx="12" cy="12" r="3"/><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/>'},
+  {id:"radical", t:"Радикальное принятие", s:"Когда изменить нельзя, а болит", ic:'<path d="M8 12.5l3 3 5.5-6.5"/><circle cx="12" cy="12" r="9"/>'},
+  {id:"accepts", t:"Отвлечься", s:"Семь способов пережить пик, не действуя", ic:'<path d="M4 7h16M4 12h10M4 17h7"/>'},
+  {id:"soothe", t:"Самоуспокоение", s:"Через пять чувств", ic:'<path d="M12 20.5s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 8a4.5 4.5 0 0 1 7.5 2.5c0 5.4-7.5 10-7.5 10z"/>'},
+  {id:"please", t:"Забота о теле", s:"Сон, еда, движение — фундамент устойчивости", ic:'<path d="M12 21V8M12 8a4 4 0 0 0-4-4H5v3a4 4 0 0 0 4 4h3zM12 8a4 4 0 0 1 4-4h3v3a4 4 0 0 1-4 4h-3z"/>'},
   {id:"child", t:"Разговор с ребёнком", s:"Той части, которую оставили одну", ic:'<path d="M12 21s-7-4.35-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 12c0 4.65-7 9-7 9z"/>'},
   {id:"prayer", t:"Молитва от вины и стыда", s:"Полная и короткая", ic:'<path d="M12 3v18M7 8h10"/>'}
 ];
@@ -1282,6 +1535,78 @@ function screenTool(id){
     '<p class="sub">· Можно положить ладонь туда, где болит, и говорить туда.</p></div></div>' +
     '<p class="tiny">Обращение можно изменить в настройках — на то имя, которым тебя звали в детстве.</p>');
 
+  if(id === "ask") return wrap(
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Импульс написать шквал сообщений — это попытка получить близость силой, потому что попросить страшно. Внизу — конструктор: заполни четыре поля, и получится то, что можно отправить.</p></div>' +
+    '<div class="card"><p class="eyebrow" style="margin-bottom:12px">Конструктор просьбы</p>' +
+    '<div class="stack">' +
+    '<label class="field"><span>1. Факты — что произошло</span><textarea data-ask="facts" id="ask-facts" placeholder="Вчера я написала днём, ответ пришёл вечером" style="min-height:56px"></textarea></label>' +
+    '<label class="field"><span>2. Чувство — от «я»</span><textarea data-ask="feel" id="ask-feel" placeholder="мне было тревожно и одиноко" style="min-height:56px"></textarea></label>' +
+    '<label class="field"><span>3. Просьба — конкретно и выполнимо</span><textarea data-ask="req" id="ask-req" placeholder="напиши хотя бы одно слово, если не можешь ответить" style="min-height:56px"></textarea></label>' +
+    '<label class="field"><span>4. Что это даст</span><textarea data-ask="gain" id="ask-gain" placeholder="мне будет спокойнее, и я не буду дёргать тебя весь день" style="min-height:56px"></textarea></label>' +
+    '<button class="btn btn-primary btn-block" data-askbuild>Собрать</button>' +
+    '<div id="askOut" hidden><div class="quote" id="askText" style="font-size:16px"></div>' +
+    '<button class="btn btn-ghost btn-block" data-askcopy style="margin-top:10px">Скопировать</button>' +
+    '<p class="tiny" style="margin-top:8px">Перечитай перед отправкой. Если внутри всё ещё трясёт — подожди час и перечитай ещё раз.</p></div>' +
+    '</div></div>' +
+    '<p class="sect-title">Семь шагов просьбы</p>' +
+    DEARMAN.map((s,i) => '<div class="flip" data-open="0"><button data-flip>' +
+      '<span class="step-no" style="color:var(--b2); margin-right:2px">' + (i+1) + '</span><span>' + esc(s.t) + '</span>' +
+      '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>' +
+      '<div class="flip-body" hidden><p>' + esc(s.d) + '</p><p class="tiny">' + esc(s.e) + '</p></div></div>').join("") +
+    '<p class="sect-title">Чтобы сохранить отношения</p>' +
+    '<div class="card">' + GIVE.map(x => '<div style="padding:10px 0; border-bottom:1px solid var(--line)">' +
+      '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>' +
+    '<p class="sect-title">Чтобы сохранить самоуважение</p>' +
+    '<div class="card">' + FAST.map(x => '<div style="padding:10px 0; border-bottom:1px solid var(--line)">' +
+      '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>');
+
+  if(id === "wise") return wrap(
+    '<div class="card"><svg viewBox="0 0 300 130" style="width:100%; height:auto; display:block" role="img" aria-label="Три круга: разум эмоций, мудрый разум на пересечении, разум рассудка">' +
+    '<circle cx="110" cy="65" r="52" fill="color-mix(in srgb, var(--danger) 16%, transparent)" stroke="var(--danger)" stroke-width="1.5"/>' +
+    '<circle cx="190" cy="65" r="52" fill="color-mix(in srgb, var(--blue) 16%, transparent)" stroke="var(--blue)" stroke-width="1.5"/>' +
+    '<text x="72" y="62" fill="var(--ink-2)" font-size="11" text-anchor="middle">разум</text>' +
+    '<text x="72" y="75" fill="var(--ink-2)" font-size="11" text-anchor="middle">эмоций</text>' +
+    '<text x="228" y="62" fill="var(--ink-2)" font-size="11" text-anchor="middle">разум</text>' +
+    '<text x="228" y="75" fill="var(--ink-2)" font-size="11" text-anchor="middle">рассудка</text>' +
+    '<text x="150" y="62" fill="var(--ink)" font-size="11" font-weight="700" text-anchor="middle">мудрый</text>' +
+    '<text x="150" y="75" fill="var(--ink)" font-size="11" font-weight="700" text-anchor="middle">разум</text></svg>' +
+    '<p class="sub" style="margin-top:10px">Разум эмоций решает из боли: написать сейчас же, уйти первой, отомстить. Разум рассудка решает из логики и не замечает, что внутри человек. Мудрый разум — там, где они пересекаются: ты знаешь, что чувствуешь, и всё равно выбираешь.</p></div>' +
+    '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Как его найти</p>' +
+    '<div class="stack-s"><p class="sub">· Задай себе вопрос как есть: «стоит ли мне сейчас писать?»</p>' +
+    '<p class="sub">· Сделай вдох и выдох и не отвечай сразу. Ответ мудрого разума приходит не как аргумент, а как спокойное знание.</p>' +
+    '<p class="sub">· Если внутри горячо и требует немедленно — это разум эмоций. Мудрый разум не торопит.</p>' +
+    '<p class="sub">· Если не приходит ничего — значит, сейчас не время решать. Это тоже ответ.</p></div></div>');
+
+  if(id === "mindful") return wrap(
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Осознанность здесь — не про медитацию и не про «очистить голову». Это способность заметить, что с тобой происходит, до того, как тело само потянулось к телефону.</p></div>' +
+    '<p class="sect-title">Что делать</p>' +
+    '<div class="card">' + MINDFUL_WHAT.map(x => '<div style="padding:11px 0; border-bottom:1px solid var(--line)">' +
+      '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>' +
+    '<p class="sect-title">Как делать</p>' +
+    '<div class="card">' + MINDFUL_HOW.map(x => '<div style="padding:11px 0; border-bottom:1px solid var(--line)">' +
+      '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>');
+
+  if(id === "radical") return wrap(
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Для ситуаций, где изменить уже ничего нельзя: он ушёл, родители были такими, какими были, время не вернуть. Сопротивление факту не отменяет факт — только добавляет страдание поверх боли.</p></div>' +
+    RADICAL.map(t => '<div class="quote calm" style="font-size:16px">' + esc(t) + '</div>').join("") +
+    '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Когда накрывает «этого не должно было быть»</p>' +
+    '<p class="sub">Скажи вслух: «это уже произошло». Заметь, как тело сопротивляется. Разожми челюсть, опусти плечи, разверни ладони вверх. Повтори столько раз, сколько понадобится — принятие уходит и возвращается, это нормально.</p></div>');
+
+  if(id === "accepts") return wrap(
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Не решение проблемы, а способ пережить пик, не сделав того, о чём пожалеешь. Волна спадает за двадцать минут — задача продержаться их.</p></div>' +
+    '<div class="card">' + ACCEPTS.map(x => '<div style="padding:11px 0; border-bottom:1px solid var(--line)">' +
+      '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>');
+
+  if(id === "soothe") return wrap(
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Когда тело успокаивается, эмоция теряет силу. Выбери одно и сделай медленно, замечая ощущение — не фоном, а внимательно.</p></div>' +
+    '<div class="card">' + SOOTHE.map(x => '<div style="padding:11px 0; border-bottom:1px solid var(--line)">' +
+      '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>');
+
+  if(id === "please") return wrap(
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Самая частая причина срыва — не событие, а то, что человек подошёл к нему невыспавшимся и голодным. Это не про дисциплину, а про то, сколько у тебя запаса прочности на трудный разговор.</p></div>' +
+    '<div class="card">' + PLEASE.map(x => '<div style="padding:11px 0; border-bottom:1px solid var(--line)">' +
+      '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>');
+
   if(id === "prayer") return wrap('<div class="quote warm">' + esc(T.prayer) + '</div>' +
     '<p class="eyebrow">Или совсем коротко, как дыхание</p>' +
     '<div class="quote warm">' + esc(T.prayerShort) + '</div>');
@@ -1289,9 +1614,61 @@ function screenTool(id){
 }
 
 /* ---------- ПРОГРЕСС ---------- */
+/* Полоса последних 14 дней: чем темнее, тем тяжелее был день. */
+function daysSection(){
+  const keys = Object.keys(DB.days);
+  if(!keys.length) return "";
+  const today = new Date(); today.setHours(0,0,0,0);
+  const cells = [];
+  for(let i=13;i>=0;i--){
+    const dt = new Date(today.getTime() - i*864e5);
+    const k = dayKey(dt), d = DB.days[k];
+    let load = null;
+    if(d){
+      const neg = ["anx","sad","ang","shm","lon"].map(x => (d.emotions||{})[x] || 0);
+      load = Math.max.apply(null, neg);
+    }
+    cells.push({ k, d:dt.getDate(), load });
+  }
+  const marked = keys.length;
+  const withLoad = cells.filter(c=> c.load !== null);
+  const heat = cells.map(c=>{
+    if(c.load === null) return '<i style="background:var(--surface-3)" title="не отмечен"></i>';
+    const a = 0.18 + (c.load/5)*0.82;
+    return '<i style="background:color-mix(in srgb, var(--blue) ' + Math.round(a*100) + '%, var(--surface-3))" title="' + c.d + ' число: ' + c.load + ' из 5"></i>';
+  }).join("");
+
+  // какие навыки применялись чаще
+  const skillCount = {};
+  keys.forEach(k => (DB.days[k].skills||[]).forEach(s => skillCount[s] = (skillCount[s]||0)+1));
+  const held = keys.filter(k => DB.days[k].acted === "held").length;
+  const answered = keys.filter(k => DB.days[k].acted).length;
+
+  let h = '<p class="sect-title">Отмеченные дни</p>' +
+    '<div class="stats">' +
+    '<div class="stat"><div class="n">' + marked + '</div><div class="l">' + plural(marked,"день","дня","дней") + ' отмечено</div></div>' +
+    (answered ? '<div class="stat"><div class="n" style="color:var(--ok)">' + Math.round(held/answered*100) + '%</div><div class="l">дней с импульсом прошли без срыва</div></div>' : "") +
+    '</div>' +
+    '<div class="card" style="margin-top:10px"><p class="eyebrow" style="margin-bottom:10px">Последние две недели</p>' +
+    '<div class="heat">' + heat + '</div>' +
+    '<div class="row" style="justify-content:space-between; margin-top:8px"><span class="tiny">14 дней назад</span><span class="tiny">сегодня</span></div>' +
+    '<p class="tiny" style="margin-top:10px">Чем насыщеннее цвет, тем сильнее было самое тяжёлое чувство дня. Серый — день не отмечен.</p></div>';
+
+  const topSkills = Object.keys(skillCount).map(k=>({k, n:skillCount[k]})).sort((a,b)=> b.n-a.n).slice(0,5);
+  if(topSkills.length){
+    const max = Math.max.apply(null, topSkills.map(t=>t.n));
+    h += '<p class="sect-title">Чем ты чаще всего пользуешься</p><div class="card"><div class="hbar">' +
+      topSkills.map(t=> '<div class="hbar-row"><span class="lb">' + esc(t.k) + '</span>' +
+        '<span class="tr"><i style="width:' + Math.round(t.n/max*100) + '%"></i></span>' +
+        '<span class="vv">' + t.n + '</span></div>').join("") + '</div></div>';
+  }
+  return h;
+}
 function screenProgress(){
   const es = DB.entries.filter(e=>!e.isExample);
+  const daysH = daysSection();
   if(es.length < 1){
+    if(daysH) return '<div class="stack" style="padding-top:8px">' + daysH + '</div>';
     return '<div class="empty"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>' +
       '<p>Здесь появится картина твоих реакций.</p><p class="tiny" style="margin-top:6px">Закономерности видно с третьей-четвёртой записи: одни и те же триггеры, одни и те же чувства под ними.</p></div>';
   }
@@ -1364,6 +1741,7 @@ function screenProgress(){
   h += topBars("Привычные импульсы", es.flatMap(e=> (get(e,"b1.urges")||[])));
   const roots = es.map(e=> get(e,"b1.primaryRoot")).filter(Boolean);
   if(roots.length) h += topBars("Первичное чувство под вторичными", roots);
+  h += daysH;
   h += '</div>';
   return h;
 }
@@ -1379,6 +1757,41 @@ function topBars(title, list){
       '<span class="vv">' + t.n + '</span></div>').join("") + '</div></div>';
 }
 
+/* ---------- ЗНАКОМСТВО ---------- */
+function screenOnboarding(){
+  const s = DB.settings;
+  return '<div class="stack" style="padding-top:26px; min-height:70vh">' +
+    '<div class="hero" style="padding:28px 24px 26px">' +
+      '<h2 style="font-size:30px; margin-bottom:12px">Я с собой</h2>' +
+      '<p style="max-width:32ch">Протокол для тех моментов, когда включается старая боль и хочется сделать то, о чём потом жалеешь.</p>' +
+    '</div>' +
+
+    '<p class="sub" style="padding:0 2px">Три вопроса один раз — чтобы приложение обращалось к тебе правильно. Всё останется только на этом устройстве.</p>' +
+
+    '<div class="card"><div class="stack">' +
+      '<label class="field"><span>Как к тебе обращаться</span>' +
+      '<input type="text" id="onb-name" placeholder="Имя" value="' + esc(s.name || "") + '"></label>' +
+
+      '<label class="field"><span>Сколько тебе лет</span>' +
+      '<input type="number" id="onb-age" inputmode="numeric" min="10" max="120" placeholder="Возраст" value="' + esc(s.age || "") + '"></label>' +
+
+      '<div><p style="font-size:13.5px; font-weight:600; color:var(--ink-2); margin-bottom:7px">Род обращения</p>' +
+      '<div class="seg-ctl">' +
+        '<button data-onbg="f" aria-pressed="' + (s.gender === "f") + '">Женский</button>' +
+        '<button data-onbg="m" aria-pressed="' + (s.gender === "m") + '">Мужской</button>' +
+      '</div>' +
+      '<p class="tiny" style="margin-top:8px">От этого зависит, как звучат фразы протокола: «я взрослая» или «я взрослый». Поменять можно в любой момент в настройках.</p></div>' +
+    '</div></div>' +
+
+    '<div class="quote calm" id="onbPreview" style="font-size:16px">' + esc(T.anchor) + '</div>' +
+
+    '<button class="btn btn-primary btn-block btn-lg" data-onbdone>Начать</button>' +
+    '<button class="btn btn-block" data-onbskip style="background:none; color:var(--muted); font-weight:500">Пропустить</button>' +
+
+    '<p class="tiny" style="text-align:center; padding:0 12px 20px">Приложение — поддержка, а не замена терапии.</p>' +
+    '</div>';
+}
+
 /* ---------- НАСТРОЙКИ ---------- */
 function screenSettings(){
   const s = DB.settings;
@@ -1388,6 +1801,13 @@ function screenSettings(){
     '<div class="seg-ctl"><button data-set="gender" data-val="f" aria-pressed="' + (s.gender==="f") + '">Женский</button>' +
     '<button data-set="gender" data-val="m" aria-pressed="' + (s.gender==="m") + '">Мужской</button></div>' +
     '<div class="quote calm" style="margin-top:12px; font-size:15.5px">' + esc(T.anchor) + '</div></div>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Имя и возраст</p>' +
+    '<div class="row" style="gap:10px; align-items:stretch">' +
+    '<input type="text" id="setName" data-setinput="name" value="' + esc(s.name||"") + '" placeholder="Имя" style="flex:2">' +
+    '<input type="number" id="setAge" data-setinput="age" value="' + esc(s.age||"") + '" placeholder="Возраст" min="5" max="120" style="flex:1">' +
+    '</div>' +
+    '<button class="linkish" data-onbagain style="margin-top:12px">Пройти приветствие заново</button></div>' +
 
     '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Обращение к внутреннему ребёнку</p>' +
     '<input type="text" id="childName" data-setinput="childName" value="' + esc(s.childName) + '" placeholder="' + esc(g("Маленькая моя","Маленький мой")) + '">' +
@@ -1425,16 +1845,28 @@ function screenSettings(){
 /* ============================================================
    РЕНДЕР И НАВИГАЦИЯ
    ============================================================ */
-const TITLES = { home:"Я с собой", wizard:"Протокол", diary:"Дневник", entry:"Запись", tools:"Практики", tool:"", progress:"Прогресс", settings:"Настройки" };
+const TITLES = { home:"Я с собой", wizard:"Протокол", diary:"Дневник", entry:"Запись", tools:"Практики", tool:"", progress:"Прогресс", settings:"Настройки", daily:"Как прошёл день", support:"Карточка поддержки" };
 let lastRenderKey = "";
+const scrollMem = {};   // где человек остановился на каждом экране
 function render(){
   clearTimers(); breathState = null;
-  // Тот же экран — остаёмся на месте; новый — открываем сверху.
   const key = view.name + "|" + (view.param || "") + "|" + stepIdx;
-  const keepScroll = (key === lastRenderKey);
-  const prevY = window.scrollY;
-  lastRenderKey = key;
+  // запоминаем позицию экрана, который сейчас уходит
+  if(lastRenderKey) scrollMem[lastRenderKey] = window.scrollY;
   const root = document.getElementById("root");
+
+  // первый запуск — знакомство, без шапки и меню
+  if(!DB.settings.onboarded){
+    document.getElementById("topbar").hidden = true;
+    document.getElementById("navbar").hidden = true;
+    root.innerHTML = screenOnboarding();
+    window.scrollTo(0,0);
+    lastRenderKey = "onboarding";
+    return;
+  }
+  document.getElementById("topbar").hidden = false;
+  document.getElementById("navbar").hidden = false;
+
   let html = "";
   if(view.name === "home") html = screenHome();
   else if(view.name === "wizard") html = screenWizard();
@@ -1444,6 +1876,8 @@ function render(){
   else if(view.name === "tool") html = screenTool(view.param);
   else if(view.name === "progress") html = screenProgress();
   else if(view.name === "settings") html = screenSettings();
+  else if(view.name === "daily") html = screenDaily();
+  else if(view.name === "support") html = screenSupport();
   root.innerHTML = html;
 
   const tool = TOOLS.find(t=>t.id===view.param);
@@ -1455,7 +1889,9 @@ function render(){
   document.querySelectorAll(".nav button").forEach(b=>{
     if(b.dataset.tab === view.tab) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current");
   });
-  window.scrollTo(0, keepScroll ? prevY : 0);
+  // возвращаемся туда же, где были на этом экране в прошлый раз
+  window.scrollTo(0, scrollMem[key] || 0);
+  lastRenderKey = key;
   if(view.name === "tool" && view.param === "urge") wireUrgeTimer();
   syncTG();
 }
@@ -1504,10 +1940,12 @@ function initTelegram(){
   }catch(e){}
 }
 function go(name, param){
+  if(name !== "daily") dayDraft = null;
   view.name = name; view.param = param || null;
   if(["home","diary","tools","progress"].indexOf(name) >= 0) view.tab = name;
   else if(name === "wizard" || name === "entry") view.tab = name === "entry" ? "diary" : "home";
   else if(name === "tool") view.tab = "tools";
+  else if(name === "daily") view.tab = "diary";
   render();
 }
 function leaveWizard(then){
@@ -1519,6 +1957,8 @@ function back(){
   if(view.name === "wizard") return leaveWizard(()=>go("home"));
   if(view.name === "entry") return go("diary");
   if(view.name === "tool") return go("tools");
+  if(view.name === "daily") return go("diary");
+  if(view.name === "support") return go("home");
   if(view.name === "settings") return go(view.tab);
   go("home");
 }
@@ -1530,7 +1970,12 @@ function newDraft(){
     b2:{ pauseDone:[], zones:[], sensations:[], bodyPractices:[], prayerDone:[], returns:[] },
     b3:{ bodyAfter:[], feelings:[], chosen:[], kindSelf:[], kindOthers:[] } };
 }
-function startWizard(){ draft = newDraft(); dirty = false; stepIdx = 0; go("wizard"); }
+function startWizard(){
+  draft = newDraft(); dirty = false; stepIdx = 0;
+  // новый протокол начинается с чистого листа, а не там, где закончился прошлый
+  Object.keys(scrollMem).forEach(k => { if(k.indexOf("wizard|") === 0) delete scrollMem[k]; });
+  go("wizard");
+}
 function wizNext(){
   const steps = visibleSteps();
   if(stepIdx < steps.length-1){ stepIdx++; render(); return; }
@@ -1619,11 +2064,44 @@ async function copyText(txt, okMsg){
    СОБЫТИЯ
    ============================================================ */
 document.addEventListener("click", (ev)=>{
-  const t = ev.target.closest("[data-chips],[data-radio],[data-go],[data-tab],[data-entry],[data-tool],[data-wiz],[data-flip],[data-breath],[data-set],[data-copy],[data-del],[data-export],[data-import],[data-wipe],[data-addanchor],[data-rmanchor],[data-addreturn],[data-rmreturn],#bStart,#backBtn,#settingsBtn");
+  const t = ev.target.closest(
+    "[data-chips],[data-radio],[data-go],[data-tab],[data-entry],[data-tool],[data-wiz],[data-flip]," +
+    "[data-breath],[data-set],[data-copy],[data-del],[data-export],[data-import],[data-wipe]," +
+    "[data-addanchor],[data-rmanchor],[data-addreturn],[data-rmreturn]," +
+    "[data-day],[data-dtab],[data-emo],[data-dchips],[data-dset],[data-dsave],[data-ddel]," +
+    "[data-supadd],[data-suprm],[data-askbuild],[data-askcopy]," +
+    "[data-onbg],[data-onbdone],[data-onbskip],[data-onbagain]," +
+    "#bStart,#backBtn,#settingsBtn");
   if(!t) return;
 
   if(t.id === "backBtn") return back();
   if(t.id === "settingsBtn") return go("settings");
+
+  /* ---- знакомство ---- */
+  if(t.dataset.onbg){
+    DB.settings.gender = t.dataset.onbg;
+    haptic("select");
+    document.querySelectorAll("[data-onbg]").forEach(b=>
+      b.setAttribute("aria-pressed", String(b.dataset.onbg === t.dataset.onbg)));
+    const prev = document.getElementById("onbPreview");
+    if(prev) prev.textContent = T.anchor;   // фраза сразу меняется — видно, на что влияет выбор
+    return;
+  }
+  if(t.hasAttribute("data-onbdone") || t.hasAttribute("data-onbskip")){
+    if(t.hasAttribute("data-onbdone")){
+      const nm = document.getElementById("onb-name");
+      const ag = document.getElementById("onb-age");
+      DB.settings.name = (nm.value || "").trim().slice(0, 40);
+      const a = parseInt(ag.value, 10);
+      DB.settings.age = (a >= 5 && a <= 120) ? a : "";
+    }
+    DB.settings.onboarded = true;
+    save(); flushSave(); haptic("light");
+    go("home"); return;
+  }
+  if(t.hasAttribute("data-onbagain")){
+    DB.settings.onboarded = false; save(); render(); return;
+  }
 
   if(t.dataset.tab){
     const tab = t.dataset.tab;
@@ -1631,8 +2109,82 @@ document.addEventListener("click", (ev)=>{
     return go(tab);
   }
   if(t.dataset.go === "wizard") return startWizard();
+  if(t.dataset.go === "support") return go("support");
   if(t.dataset.entry) return go("entry", t.dataset.entry);
   if(t.dataset.tool) return go("tool", t.dataset.tool);
+  if(t.dataset.day) return go("daily", t.dataset.day);
+  if(t.dataset.dtab){ diaryTab = t.dataset.dtab; return render(); }
+
+  /* ---- карточка дня ---- */
+  if(t.dataset.emo){
+    if(!dayDraft) return;
+    const k = t.dataset.emo, v = +t.dataset.val;
+    if(dayDraft.emotions[k] === v) delete dayDraft.emotions[k];   // повторное нажатие снимает отметку
+    else dayDraft.emotions[k] = v;
+    haptic("select");
+    t.parentElement.querySelectorAll("[data-emo]").forEach(b=>
+      b.setAttribute("aria-pressed", String(+b.dataset.val === dayDraft.emotions[k])));
+    return;
+  }
+  if(t.dataset.dchips){
+    if(!dayDraft) return;
+    const arr = toggleIn(dayDraft, t.dataset.dchips, t.dataset.val);
+    haptic("select");
+    t.setAttribute("aria-pressed", String(arr.indexOf(t.dataset.val) >= 0));
+    // блок «и что с ними было» появляется только когда отмечен хоть один импульс
+    if(t.dataset.dchips === "urges" && (arr.length === 0 || arr.length === 1)) render();
+    return;
+  }
+  if(t.dataset.dset === "acted"){
+    if(!dayDraft) return;
+    dayDraft.acted = (dayDraft.acted === t.dataset.val) ? "" : t.dataset.val;
+    haptic("select");
+    document.querySelectorAll('[data-dset="acted"]').forEach(b=>
+      b.setAttribute("aria-pressed", String(b.dataset.val === dayDraft.acted)));
+    return;
+  }
+  if(t.dataset.dsave){
+    if(!dayDraft) return;
+    DB.days[t.dataset.dsave] = JSON.parse(JSON.stringify(dayDraft));
+    save(); flushSave();
+    toast("День сохранён"); dayDraft = null; diaryTab = "days"; go("diary"); return;
+  }
+  if(t.dataset.ddel){
+    const k = t.dataset.ddel;
+    modal({ title:"Удалить отметку за день?", okLabel:"Удалить", danger:true,
+      onOk:()=>{ delete DB.days[k]; save(); dayDraft = null; diaryTab = "days"; toast("Отметка удалена"); go("diary"); } });
+    return;
+  }
+
+  /* ---- карточка поддержки ---- */
+  if(t.dataset.supadd){
+    const f = t.dataset.supadd, inp = document.getElementById("sup-" + f);
+    const v = (inp.value || "").trim();
+    if(v){ DB.support[f].push(v); save(); render(); }
+    return;
+  }
+  if(t.dataset.suprm){ DB.support[t.dataset.suprm].splice(+t.dataset.i, 1); save(); render(); return; }
+
+  /* ---- конструктор просьбы ---- */
+  if(t.hasAttribute("data-askbuild")){
+    const v = (id)=> (document.getElementById("ask-" + id).value || "").trim();
+    const facts = v("facts"), feel = v("feel"), req = v("req"), gain = v("gain");
+    if(!facts && !req){ toast("Заполни хотя бы факты и просьбу"); return; }
+    const parts = [];
+    if(facts) parts.push(facts.replace(/\s*[.。]?\s*$/, "") + ".");
+    if(feel) parts.push(feel.charAt(0).toUpperCase() + feel.slice(1).replace(/\s*[.。]?\s*$/, "") + ".");
+    if(req) parts.push("Я прошу: " + req.replace(/^\s*[А-ЯA-Z]/, c=>c.toLowerCase()).replace(/\s*[.。]?\s*$/, "") + ".");
+    if(gain) parts.push(gain.charAt(0).toUpperCase() + gain.slice(1).replace(/\s*[.。]?\s*$/, "") + ".");
+    const out = document.getElementById("askOut");
+    document.getElementById("askText").textContent = parts.join(" ");
+    out.hidden = false;
+    haptic("light");
+    return;
+  }
+  if(t.hasAttribute("data-askcopy")){
+    copyText(document.getElementById("askText").textContent, "Скопировано");
+    return;
+  }
 
   if(t.hasAttribute("data-flip")){
     const box = t.closest(".flip"), body = box.querySelector(".flip-body");
@@ -1734,6 +2286,8 @@ document.addEventListener("input", (ev)=>{
     return;
   }
   if(el.dataset && el.dataset.setinput){ DB.settings[el.dataset.setinput] = el.value; save(); return; }
+  if(el.hasAttribute("data-dnote") && dayDraft){ dayDraft.note = el.value; return; }
+  if(el.hasAttribute("data-supreasons")){ DB.support.reasons = el.value; save(); return; }
 });
 
 window.addEventListener("scroll", ()=>{
@@ -1749,6 +2303,10 @@ window.addEventListener("scroll", ()=>{
     DB = Object.assign({}, DEFAULTS, loaded);
     DB.settings = Object.assign({}, DEFAULTS.settings, loaded.settings||{});
     DB.entries = Array.isArray(loaded.entries) ? loaded.entries : [];
+    DB.days = (loaded.days && typeof loaded.days === "object") ? loaded.days : {};
+    DB.support = Object.assign({}, DEFAULTS.support, loaded.support||{});
+    // у тех, кто уже пользовался приложением, знакомство не всплывает задним числом
+    if(loaded.settings && loaded.settings.onboarded === undefined) DB.settings.onboarded = true;
   }
   // Убираем демонстрационную запись, если она осталась от предыдущей версии.
   const n = DB.entries.length;
