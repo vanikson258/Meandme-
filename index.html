@@ -492,6 +492,18 @@ label.field > span{display:block; font-size:13.5px; font-weight:600; color:var(-
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .lv-b[aria-pressed="true"]{color:#08131D} }
 @media (max-width:360px){ .lv-b{width:27px; height:27px; font-size:12px} }
 
+/* цепочка поведенческого анализа */
+.chain{display:flex; flex-direction:column; gap:0}
+.chain-item{position:relative; padding:12px 0 12px 20px; border-left:2px solid var(--line)}
+.chain-item::before{
+  content:""; position:absolute; left:-6px; top:16px; width:10px; height:10px; border-radius:50%;
+  background:var(--line-2); border:2px solid var(--surface);
+}
+.chain-item.thought::before{background:var(--b3)}
+.chain-item.feel::before{background:var(--b1)}
+.chain-item.act::before{background:var(--warn)}
+.chain-item:last-child{border-left-color:transparent}
+
 .day-row{display:flex; align-items:center; gap:3px}
 .day-cell{flex:1; height:30px; border-radius:6px; background:var(--surface-3); position:relative}
 .day-cell.on{background:var(--blue)}
@@ -632,10 +644,12 @@ let Adapter = (TG && TG.CloudStorage && tgAtLeast("6.9")) ? CloudAdapter : Local
 
 /* ---------- СОСТОЯНИЕ ---------- */
 const DEFAULTS = {
-  settings:{ gender:"f", prayer:true, childName:"", anchors:[], returns:[], name:"", age:"", onboarded:false },
+  settings:{ gender:"m", prayer:true, prayerText:"", prayerShortText:"", childName:"", anchors:[], returns:[], name:"", age:"", onboarded:false },
   entries:[],
   days:{},                                              // карточки дня: "2026-09-21" -> {...}
   support:{ signs:[], helps:[], people:[], reasons:"" },// карточка поддержки
+  chains:[],                                            // поведенческий анализ
+  rel:{ hierarchy:[], listenBlocks:[], styleAnswers:[], shouldAnswers:[], needs:[], urg:null, vul:null },
   seeded:false
 };
 function dayKey(d){
@@ -647,6 +661,8 @@ let view = { name:"home", param:null, tab:"home" };
 let draft = null;
 let dirty = false;
 let diaryTab = "entries";
+let relDraftD = null, relDraftMine = null, relDraftTheirs = null;   // временные поля форм в «Отношениях»
+let chainDraft = null, chainKind = "thought";
 let stepIdx = 0;
 let timers = [];
 
@@ -678,11 +694,14 @@ const T = {
     const n = (DB.settings.childName || "").trim() || g("Маленькая моя","Маленький мой");
     return n + ", я вижу, как тебе страшно. Я не уйду. Я не оттолкну тебя. Я с тобой. Мы справимся. Тебе больше не надо заслуживать любовь. Ты уже есть.";
   },
-  get prayer(){
+  get prayerDefault(){
     return "Господи, я " + g("устала","устал") + ". Мне стыдно и больно. Я не знаю, как мне справиться. Прими меня сейчас, не осуждая. Прости мне то, в чём я правда " + g("виновата","виноват") +
       ", и помоги отпустить то, что не моя вина. Верни мне мир. Напомни, что я — " + g("Твоя","Твой") + ", а не " + g("отвергнутая","отвергнутый") + ". Держи меня. Исцели моё сердце. Аминь.";
   },
-  get prayerShort(){ return "Господи, помилуй. Я " + g("Твоя","Твой") + ". Я не " + g("одна","один") + ". Удержи меня."; }
+  get prayerShortDefault(){ return "Господи, помилуй. Я " + g("Твоя","Твой") + ". Я не " + g("одна","один") + ". Удержи меня."; },
+  // Свой текст перебивает исходный — блок можно сделать любым: другая молитва, стих, слова близкого.
+  get prayer(){ return (DB.settings.prayerText || "").trim() || T.prayerDefault; },
+  get prayerShort(){ return (DB.settings.prayerShortText || "").trim() || T.prayerShortDefault; }
 };
 
 /* ---------- СПРАВОЧНИКИ ---------- */
@@ -762,6 +781,78 @@ const FAST = [
   {t:"Верность себе", d:"Не отказывайся от важного ради того, чтобы точно не бросили."},
   {t:"Правдиво", d:"Без преувеличений, без «ты никогда» и без выдуманной беспомощности, чтобы разжалобить."}
 ];
+
+/* ---- отказ ---- */
+const NOSAY_EX = [
+  "Я понимаю, что тебе хочется поехать всем вместе. Мне в эти выходные нужно побыть одной.",
+  "Вижу, что для тебя это важно. Я не возьмусь за это — у меня сейчас нет на это сил.",
+  "Понимаю, что ты рассчитывал на меня. В этот раз я откажусь.",
+  "Слышу, что тебе срочно. Мне некомфортно давать в долг — это правило для всех, не про тебя."
+];
+/* ---- когда не слышат ---- */
+const RESIST = [
+  {t:"Признать чувства другого", d:"Начни с «я понимаю, что…», закончи «со своей стороны, я…». Признать — не значит согласиться. Чаще всего человек упирается именно потому, что не чувствует себя услышанным.",
+   e:"«Я понимаю, что тебе тяжело, когда я ухожу в себя. Со своей стороны, мне нужен час тишины, чтобы вернуться в разговор спокойной»."},
+  {t:"Заезженная пластинка", d:"Сформулируй одно короткое предложение о том, что тебе нужно, и повторяй его спокойно, меняя слова, но не смысл. Не спорь, не объясняй, не отвечай на «почему» — каждый новый довод даёт материал, чтобы его оспорить.",
+   e:"«Мне нужно, чтобы ты предупреждал, если задерживаешься». — «Мне это важно, предупреждай, пожалуйста». — «Я прошу просто писать, когда задерживаешься»."},
+  {t:"Зондирование", d:"Когда тебя критикуют или давят, спрашивай, что именно человека беспокоит, — и повторяй вопрос, пока не доберёшься до настоящей причины. Обычно она не та, что прозвучала первой.",
+   e:"«Что именно тебя в этом беспокоит?» — «А что тебя беспокоит в том, что я ушла раньше?»"},
+  {t:"Частичное согласие", d:"Найди в сказанном ту часть, которая правда, и согласись только с ней. Остальное не обсуждай. Заодно убери преувеличения — «всегда» и «никогда» почти никогда не факт.",
+   e:"«Да, вчера я ответила резко. А вот что я всегда так делаю — нет»."},
+  {t:"Ассертивная отсрочка", d:"Если разговор накаляется, отложи его вслух и с конкретным сроком. Это не побег, если ты называешь, когда вернёшься.",
+   e:"«Мне нужно подумать. Давай вернёмся к этому завтра вечером»."}
+];
+/* ---- слушание ---- */
+const LISTEN_Q = [
+  "Что для тебя здесь главное?",
+  "Как ты видишь эту ситуацию?",
+  "Что ты чувствуешь, когда это происходит?",
+  "Чего бы тебе хотелось?",
+  "Что, по-твоему, стоит изменить?",
+  "Чем я могу помочь?"
+];
+const LISTEN_BLOCKS = [
+  {t:"Чтение мыслей", d:"Решаю за него, что он думает и чувствует, вместо того чтобы спросить."},
+  {t:"Репетиция", d:"Обдумываю свой ответ и пропускаю мимо ушей то, что говорят сейчас."},
+  {t:"Фильтрация", d:"Слышу только то, что задевает меня, остальное не долетает."},
+  {t:"Оценивание", d:"Сужу человека и его слова, вместо того чтобы понять, как он это видит."},
+  {t:"Отвлечение", d:"Ухожу в свои мысли или воспоминания посреди разговора."},
+  {t:"Поиск решений", d:"Бросаюсь советовать, хотя меня просили просто выслушать."},
+  {t:"Спарринг", d:"Спорю и отметаю его чувства как неправильные."},
+  {t:"Желание быть правым", d:"Игнорирую всё, что намекает, что я неправ или должен меняться."},
+  {t:"Уход от темы", d:"Перевожу разговор, как только становится неприятно."},
+  {t:"Соглашательство", d:"Быстро соглашаюсь, чтобы всё закончилось, не вникая по-настоящему."}
+];
+/* ---- самотесты ---- */
+const STYLE_TEST = [
+  {t:"Соглашаюсь, даже когда мне это не нравится", k:"p"},
+  {t:"Подталкиваю людей делать «как правильно», даже если их это расстраивает", k:"a"},
+  {t:"Стараюсь быть удобным, что бы вокруг ни происходило", k:"p"},
+  {t:"Высказываю людям всё, если они это заслужили", k:"a"},
+  {t:"Всегда учитываю чужие интересы, даже в ущерб своим", k:"p"},
+  {t:"Знаю, чего хочу, и добиваюсь, даже если приходится выйти из себя", k:"a"},
+  {t:"В конфликте обычно уступаю и перехожу на сторону другого", k:"p"},
+  {t:"Когда люди поступают нелепо, я не даю им этого делать", k:"a"},
+  {t:"Лучше промолчу, чем скажу то, что может кого-то расстроить", k:"p"},
+  {t:"Нельзя позволять людям быть эгоистичными — их надо встряхнуть", k:"a"},
+  {t:"Не лезу в чужие дела, пусть всё идёт как идёт", k:"p"},
+  {t:"Если мои потребности не замечают, я расстраиваюсь всё сильнее, пока не обратят внимание", k:"a"}
+];
+const SHOULD_TEST = [
+  "Я должен дать всё, что от меня ждут, даже ценой своих потребностей",
+  "Если кому-то плохо, я должен сделать всё, чтобы помочь",
+  "Я всегда должен быть заботливым и внимательным",
+  "Нельзя просить, если знаешь, что другой не хочет давать",
+  "Есть правильный способ обращаться с людьми, и его надо держать, даже не слушая себя",
+  "Нельзя говорить людям «нет» — это невежливо",
+  "Нельзя выражать чувства, которые могут кого-то расстроить",
+  "Потребности других важнее моих",
+  "Я никогда не должен никого обидеть",
+  "Я должен стараться никого не разочаровывать"
+];
+/* ---- поведенческий анализ ---- */
+const CHAIN_VULN = ["недосып","голод","усталость","болею","выпил(а) накануне","был конфликт до этого","аврал на работе","долго без общения","давно не выходил(а) из дома","тяжёлые новости"];
+const LINK_KINDS = [{k:"thought", n:"мысль"}, {k:"feel", n:"чувство"}, {k:"act", n:"действие"}];
 
 /* ---- остальные навыки ДБТ ---- */
 const ACCEPTS = [
@@ -1017,8 +1108,16 @@ const STEPS = [
       '<textarea data-f="b2.interpretation" id="f-b2-interpretation" placeholder="Я ему не нужна, он отдаляется, сейчас всё закончится.">' + esc(get(draft,"b2.interpretation")||"") + '</textarea></div>' +
       '<div class="fir-item r"><p class="eyebrow">Реальные причины</p><p class="tiny" style="margin-bottom:8px">Все объяснения, которые тоже подходят под эти факты.</p>' +
       '<textarea data-f="b2.realCauses" id="f-b2-realCauses" placeholder="Работа, разряженный телефон, усталость, его собственное состояние.">' + esc(get(draft,"b2.realCauses")||"") + '</textarea></div></div>' +
+      '<div class="flip" data-open="0"><button data-flip><span>Взвесить доказательства</span>' +
+      '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>' +
+      '<div class="flip-body" hidden>' +
+      '<p class="tiny">Суд над собственной интерпретацией. Сначала всё, что её подтверждает, потом всё, что ей противоречит, — и только потом вывод.</p>' +
+      area("b2.evFor","Что подтверждает мою версию","За") +
+      area("b2.evAgainst","Что ей противоречит. Вспомни случаи, когда было иначе","Против") +
+      area("b2.evFair","Как это выглядит, если посмотреть на всё сразу","Справедливее всего") +
+      '</div></div>' +
       '<div class="card flat" style="background:var(--surface-2)"><p class="eyebrow" style="margin-bottom:8px">Если застряла — спроси себя</p>' +
-      '<p class="sub">Что я скажу подруге, если она расскажет мне ровно это? Какие есть доказательства за мою версию — и какие против? Что я буду думать об этом через неделю?</p></div></div>' },
+      '<p class="sub">Что я скажу подруге, если она расскажет мне ровно это? Что я буду думать об этом через неделю?</p></div></div>' },
 
   /* ---- БЛОК 3 ---- */
   { b:3, no:"2.8", title:"Как теперь в теле", hint:"Проверка. Не «должно стать хорошо», а «что есть на самом деле».",
@@ -1235,7 +1334,26 @@ function screenWizard(){
 function diaryTabs(){
   return '<div class="seg-ctl" style="margin:8px 0 2px">' +
     '<button data-dtab="entries" aria-pressed="' + (diaryTab==="entries") + '">Разборы</button>' +
-    '<button data-dtab="days" aria-pressed="' + (diaryTab==="days") + '">Дни</button></div>';
+    '<button data-dtab="days" aria-pressed="' + (diaryTab==="days") + '">Дни</button>' +
+    '<button data-dtab="chains" aria-pressed="' + (diaryTab==="chains") + '">Цепочки</button></div>';
+}
+function screenChains(){
+  let h = '<div class="stack" style="padding-top:4px">' + diaryTabs() +
+    '<button class="btn btn-primary btn-block" data-chain="">Разобрать цепочку</button>';
+  if(!DB.chains.length){
+    h += '<div class="empty"><p>Разборов цепочек пока нет.</p>' +
+      '<p class="tiny" style="margin-top:6px">Когда одно и то же повторяется, полезно разложить путь от события до поступка по звеньям и найти то, где ещё был выбор.</p></div>';
+  } else {
+    h += DB.chains.map(c =>
+      '<button class="entry" data-chain="' + esc(c.id) + '">' +
+      '<div class="row"><span class="tiny">' + fmtDate(c.createdAt) + '</span>' +
+      '<span style="flex:1"></span>' +
+      '<span class="tiny">звеньев: ' + (c.links||[]).length + '</span></div>' +
+      '<p class="entry-trigger">' + esc(chainLine(c)) + '</p>' +
+      ((c.alt||"").trim() ? '<p class="sub" style="color:var(--b2)">' + esc(c.alt.slice(0,110)) + '</p>' : "") +
+      '</button>').join("");
+  }
+  return h + '</div>';
 }
 function screenDays(){
   const keys = Object.keys(DB.days).sort().reverse();
@@ -1263,6 +1381,7 @@ function screenDays(){
 }
 function screenDiary(){
   if(diaryTab === "days") return screenDays();
+  if(diaryTab === "chains") return screenChains();
   if(!DB.entries.length){
     return '<div class="stack" style="padding-top:4px">' + diaryTabs() + '</div>' +
       '<div class="empty"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v14.5"/><path d="M6.5 16H20v3.5a1.5 1.5 0 0 1-1.5 1.5h-12A2.5 2.5 0 0 1 4 18.5v-13"/></svg>' +
@@ -1319,7 +1438,8 @@ function screenEntry(id){
     dl("2.4 Ребёнку", get(e,"b2.childText")) +
     dl("2.5 Молитва", get(e,"b2.prayerDone")) +
     dl("2.6 Возвращение к жизни", get(e,"b2.returns")) +
-    dl("2.7 Факты", get(e,"b2.facts")) + dl("2.7 Интерпретация", get(e,"b2.interpretation")) + dl("2.7 Реальные причины", get(e,"b2.realCauses")));
+    dl("2.7 Факты", get(e,"b2.facts")) + dl("2.7 Интерпретация", get(e,"b2.interpretation")) + dl("2.7 Реальные причины", get(e,"b2.realCauses")) +
+    dl("Доказательства за", get(e,"b2.evFor")) + dl("Доказательства против", get(e,"b2.evAgainst")) + dl("Справедливее всего", get(e,"b2.evFair")));
 
   h += blk("b3", "Блок 3 · Проверка",
     dl("2.8 Тело после", get(e,"b3.bodyAfter")) + dl("Подробнее", get(e,"b3.bodyAfterText")) +
@@ -1393,6 +1513,104 @@ function screenDaily(){
     '</div>';
 }
 
+/* ---------- «МНЕ НУЖНО — ИМ НУЖНО» ---------- */
+function needsBlock(){
+  const list = DB.rel.needs || [];
+  const bar = (v, color) => '<span class="tr" style="width:100%"><i style="width:' + (v*10) + '%; background:' + color + '"></i></span>';
+  let h = "";
+  if(list.length){
+    h += '<div class="stack-s" style="margin-bottom:16px">' + list.map((x,i)=>{
+      const gap = Math.abs(x.mine - x.theirs);
+      const note = gap <= 2 ? "примерно поровну"
+        : (x.mine < x.theirs ? "перекос в его сторону — ты отдаёшь больше, чем получаешь"
+                             : "перекос в твою сторону — стоит посмотреть, что ты не замечаешь в нём");
+      return '<div style="padding:12px 0; border-bottom:1px solid var(--line)">' +
+        '<div class="row" style="margin-bottom:8px"><b style="font-size:14.5px; flex:1">' + esc(x.who) + '</b>' +
+        '<button class="linkish" data-nrm="' + i + '" style="color:var(--danger)">убрать</button></div>' +
+        '<div class="row" style="gap:8px; margin-bottom:5px"><span class="tiny" style="width:64px; flex:none">мои</span>' +
+        bar(x.mine, "var(--blue)") + '<span class="vv">' + x.mine + '</span></div>' +
+        '<div class="row" style="gap:8px"><span class="tiny" style="width:64px; flex:none">его, её</span>' +
+        bar(x.theirs, "var(--b2)") + '<span class="vv">' + x.theirs + '</span></div>' +
+        '<p class="tiny" style="margin-top:7px">' + esc(note) + '</p></div>';
+    }).join("") + '</div>';
+  }
+  const scale = (field, cur) => '<div class="lv" style="flex-wrap:wrap; margin-top:6px">' +
+    [0,1,2,3,4,5,6,7,8,9,10].map(n =>
+      '<button class="lv-b" data-nsc="' + field + '" data-val="' + n + '" aria-pressed="' + (cur === n) + '">' + n + '</button>').join("") + '</div>';
+  h += '<label class="field"><span>С кем эти отношения</span><input type="text" id="n-who" placeholder="Например: девушка, мама, Илья"></label>' +
+    '<div style="margin-top:12px"><p style="font-size:13.5px; font-weight:600; color:var(--ink-2)">Насколько здесь удовлетворены мои потребности</p>' + scale("mine", relDraftMine) + '</div>' +
+    '<div style="margin-top:12px"><p style="font-size:13.5px; font-weight:600; color:var(--ink-2)">Насколько — его или её</p>' + scale("theirs", relDraftTheirs) + '</div>' +
+    '<button class="btn btn-block" data-nadd style="margin-top:14px">Добавить</button>';
+  return h;
+}
+
+/* ---------- ПОВЕДЕНЧЕСКИЙ АНАЛИЗ ---------- */
+function blankChain(){
+  return { id:uid(), createdAt:Date.now(), target:"", vuln:[], trigger:"", links:[], outcome:"", weakIdx:null, alt:"", when:"" };
+}
+function chainLine(c){
+  const t = (c.target||"").trim();
+  return t ? (t.length > 90 ? t.slice(0,90) + "…" : t) : "Без названия";
+}
+function screenChain(){
+  const id = view.param;
+  if(!chainDraft){
+    const ex = id ? DB.chains.find(x=>x.id===id) : null;
+    chainDraft = ex ? JSON.parse(JSON.stringify(ex)) : blankChain();
+  }
+  const c = chainDraft;
+  const kindName = k => (LINK_KINDS.find(x=>x.k===k)||{}).n || k;
+
+  const linksHtml = c.links.length
+    ? '<div class="chain">' + c.links.map((l,i) =>
+        '<div class="chain-item ' + l.kind + '">' +
+        '<div class="row" style="margin-bottom:6px"><span class="pill ' + (l.kind==="act" ? "warn" : l.kind==="feel" ? "b1" : "b3") + '">' + kindName(l.kind) + '</span>' +
+        '<span style="flex:1"></span>' +
+        '<button class="linkish" data-clrm="' + i + '" style="color:var(--danger)">убрать</button></div>' +
+        '<p class="sub">' + esc(l.text) + '</p></div>').join("") + '</div>'
+    : '<p class="tiny">Пока ни одного звена. Восстанови по шагам, что происходило между событием и тем, что ты в итоге сделал.</p>';
+
+  return '<div class="stack" style="padding-top:8px">' +
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Протокол разбирает один момент. Здесь другое: выстроить всю цепочку от события до поступка и увидеть, что событие — лишь первое звено из многих. Менять проще не его, а одно из звеньев в середине.</p></div>' +
+
+    '<label class="field"><span>Что я хочу разобрать</span>' +
+    '<textarea data-cf="target" id="c-target" placeholder="Например: сорвался и наговорил лишнего" style="min-height:56px">' + esc(c.target) + '</textarea></label>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:6px">Что ослабило меня в тот день</p>' +
+    '<p class="tiny" style="margin-bottom:10px">Уязвимость — половина причины. На выспавшегося и сытого то же событие действует иначе.</p>' +
+    '<div class="chips">' + CHAIN_VULN.map(v =>
+      '<button class="chip b1" data-cchips="vuln" data-val="' + esc(v) + '" aria-pressed="' + (c.vuln.indexOf(v)>=0) + '">' + esc(v) + '</button>').join("") + '</div></div>' +
+
+    '<label class="field"><span>С чего всё началось</span>' +
+    '<textarea data-cf="trigger" id="c-trigger" placeholder="Внешнее событие, которое ты не контролировал" style="min-height:56px">' + esc(c.trigger) + '</textarea></label>' +
+
+    '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Звенья цепочки</p>' + linksHtml +
+    '<div style="margin-top:14px"><div class="seg-ctl" style="margin-bottom:10px">' +
+      LINK_KINDS.map(x => '<button data-ck="' + x.k + '" aria-pressed="' + (chainKind === x.k) + '">' + x.n + '</button>').join("") + '</div>' +
+    '<div class="row" style="gap:8px"><input type="text" id="c-link" placeholder="Что было дальше">' +
+    '<button class="btn" data-cladd style="flex:none">Добавить</button></div></div></div>' +
+
+    '<label class="field"><span>Чем закончилось</span>' +
+    '<textarea data-cf="outcome" id="c-outcome" placeholder="Что я в итоге сделал и что из этого вышло" style="min-height:56px">' + esc(c.outcome) + '</textarea></label>' +
+
+    (c.links.length ? '<div class="card"><p class="eyebrow" style="margin-bottom:6px">Какое звено я в силах изменить</p>' +
+      '<p class="tiny" style="margin-bottom:10px">Не событие — на него ты повлиять не мог. Выбери то звено, где ещё был выбор.</p>' +
+      '<div class="stack-s">' + c.links.map((l,i) =>
+        '<button class="check" data-cweak="' + i + '" aria-pressed="' + (c.weakIdx === i) + '">' +
+        '<span class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span>' +
+        '<span><span class="tiny">' + esc(kindName(l.kind)) + '</span><br>' + esc(l.text) + '</span></button>').join("") + '</div></div>' : "") +
+
+    '<label class="field"><span>Что можно сделать вместо этого</span>' +
+    '<textarea data-cf="alt" id="c-alt" placeholder="Несколько вариантов, даже нелепых — потом выберешь один-два" style="min-height:76px">' + esc(c.alt) + '</textarea></label>' +
+
+    '<label class="field"><span>Когда и где попробую</span>' +
+    '<textarea data-cf="when" id="c-when" placeholder="Конкретно: в какой ситуации применю" style="min-height:56px">' + esc(c.when) + '</textarea></label>' +
+
+    '<button class="btn btn-primary btn-block btn-lg" data-csave>Сохранить разбор</button>' +
+    (id && DB.chains.some(x=>x.id===id) ? '<button class="btn btn-ghost btn-block" data-cdel="' + esc(id) + '" style="border:none; color:var(--muted); font-weight:500">Удалить разбор</button>' : "") +
+    '</div>';
+}
+
 /* ---------- КАРТОЧКА ПОДДЕРЖКИ ---------- */
 function listEditor(field, placeholder, items){
   return (items.length ? '<div class="stack-s" style="margin-bottom:10px">' + items.map((v,i)=>
@@ -1441,6 +1659,11 @@ const TOOLS = [
   {id:"distortions", t:"Ловушки мышления", s:"12 искажений и вопрос к каждому", ic:'<path d="M9.7 17h4.6M12 3a6 6 0 0 1 3.5 10.9c-.6.4-.9 1-.9 1.7v.4H9.4v-.4c0-.7-.3-1.3-.9-1.7A6 6 0 0 1 12 3z"/>'},
   {id:"opposite", t:"Противоположное действие", s:"Что делать вместо импульса", ic:'<path d="M7 7h10l-3-3M17 17H7l3 3"/>'},
   {id:"ask", t:"Попросить словами", s:"Как сказать о нужном вместо шквала сообщений", ic:'<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.6-.7L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z"/>'},
+  {id:"nosay", t:"Сказать «нет»", s:"Отказ, который не разрушает связь", ic:'<circle cx="12" cy="12" r="9"/><path d="M6 18L18 6"/>'},
+  {id:"resist", t:"Когда не слышат", s:"Пять приёмов, если просьба не доходит", ic:'<path d="M4 10v4h3l5 4V6L7 10H4z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>'},
+  {id:"intensity", t:"Насколько твёрдо просить", s:"Два вопроса вместо «промолчу или взорвусь»", ic:'<path d="M12 21a9 9 0 1 1 9-9"/><path d="M12 12l5-3"/><circle cx="12" cy="12" r="1.6"/>'},
+  {id:"listen", t:"Услышать другого", s:"Что спрашивать и что мешает слышать", ic:'<path d="M6 14a6 6 0 1 1 12 0c0 3-2 4-2 6H8c0-2-2-3-2-6z"/><path d="M10 20h4"/>'},
+  {id:"selftest", t:"Три теста о себе", s:"Мой стиль, мои «я должен», баланс в отношениях", ic:'<path d="M9 11l2 2 4-4"/><rect x="4" y="4" width="16" height="16" rx="3"/>'},
   {id:"wise", t:"Мудрый разум", s:"Между «чувствую» и «рассуждаю»", ic:'<path d="M12 3a6 6 0 0 1 3.5 10.9c-.6.4-.9 1-.9 1.7v.4H9.4v-.4c0-.7-.3-1.3-.9-1.7A6 6 0 0 1 12 3z"/><path d="M9.7 19h4.6"/>'},
   {id:"mindful", t:"Осознанность", s:"Наблюдать, описывать, участвовать", ic:'<circle cx="12" cy="12" r="3"/><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/>'},
   {id:"radical", t:"Радикальное принятие", s:"Когда изменить нельзя, а болит", ic:'<path d="M8 12.5l3 3 5.5-6.5"/><circle cx="12" cy="12" r="9"/>'},
@@ -1450,12 +1673,23 @@ const TOOLS = [
   {id:"child", t:"Разговор с ребёнком", s:"Той части, которую оставили одну", ic:'<path d="M12 21s-7-4.35-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 12c0 4.65-7 9-7 9z"/>'},
   {id:"prayer", t:"Молитва от вины и стыда", s:"Полная и короткая", ic:'<path d="M12 3v18M7 8h10"/>'}
 ];
+const TOOL_GROUPS = [
+  {n:"Когда накрыло", ids:["breath","ground","urge","calm","anchor","accepts","soothe"]},
+  {n:"Отношения", ids:["ask","nosay","resist","intensity","listen","selftest"]},
+  {n:"Понять себя", ids:["feelings","distortions","opposite","mindful","wise"]},
+  {n:"Опора", ids:["radical","child","please","prayer"]}
+];
 function screenTools(){
-  return '<div class="stack-s" style="padding-top:8px; gap:9px">' + TOOLS.filter(t=> t.id!=="prayer" || DB.settings.prayer).map(t =>
-    '<button class="tool" data-tool="' + t.id + '"><span class="tool-ic"><svg viewBox="0 0 24 24">' + t.ic + '</svg></span>' +
+  const byId = {}; TOOLS.forEach(t => byId[t.id] = t);
+  const row = t => '<button class="tool" data-tool="' + t.id + '"><span class="tool-ic"><svg viewBox="0 0 24 24">' + t.ic + '</svg></span>' +
     '<span style="flex:1; min-width:0"><b>' + esc(t.t) + '</b><span>' + esc(t.s) + '</span></span>' +
-    '<svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:var(--muted);fill:none;stroke-width:2;flex:none"><path d="M9 6l6 6-6 6"/></svg></button>'
-  ).join("") + '</div>';
+    '<svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:var(--muted);fill:none;stroke-width:2;flex:none"><path d="M9 6l6 6-6 6"/></svg></button>';
+  return '<div style="padding-top:4px">' + TOOL_GROUPS.map(gr => {
+    const items = gr.ids.map(i => byId[i]).filter(t => t && (t.id !== "prayer" || DB.settings.prayer));
+    if(!items.length) return "";
+    return '<p class="sect-title">' + esc(gr.n) + '</p>' +
+      '<div class="stack-s" style="gap:9px">' + items.map(row).join("") + '</div>';
+  }).join("") + '</div>';
 }
 function screenTool(id){
   const wrap = h => '<div class="stack" style="padding-top:8px">' + h + '</div>';
@@ -1543,6 +1777,9 @@ function screenTool(id){
     '<label class="field"><span>2. Чувство — от «я»</span><textarea data-ask="feel" id="ask-feel" placeholder="мне было тревожно и одиноко" style="min-height:56px"></textarea></label>' +
     '<label class="field"><span>3. Просьба — конкретно и выполнимо</span><textarea data-ask="req" id="ask-req" placeholder="напиши хотя бы одно слово, если не можешь ответить" style="min-height:56px"></textarea></label>' +
     '<label class="field"><span>4. Что это даст</span><textarea data-ask="gain" id="ask-gain" placeholder="мне будет спокойнее, и я не буду дёргать тебя весь день" style="min-height:56px"></textarea></label>' +
+    '<label class="field"><span>5. Как я позабочусь о себе, если ответа не будет</span>' +
+    '<textarea data-ask="self" id="ask-self" placeholder="если не получится — я не буду ждать весь вечер, а займусь своим" style="min-height:56px"></textarea>' +
+    '<span class="tiny" style="display:block; margin-top:7px; font-weight:400">Не угроза и не наказание, а информация: у тебя есть план и без его согласия. Это меняет позицию с «умоляю, не бросай» на «я справлюсь, но предпочитаю с тобой» — и почти всегда снижает сопротивление.</span></label>' +
     '<button class="btn btn-primary btn-block" data-askbuild>Собрать</button>' +
     '<div id="askOut" hidden><div class="quote" id="askText" style="font-size:16px"></div>' +
     '<button class="btn btn-ghost btn-block" data-askcopy style="margin-top:10px">Скопировать</button>' +
@@ -1559,6 +1796,112 @@ function screenTool(id){
     '<p class="sect-title">Чтобы сохранить самоуважение</p>' +
     '<div class="card">' + FAST.map(x => '<div style="padding:10px 0; border-bottom:1px solid var(--line)">' +
       '<b style="font-size:14.5px">' + esc(x.t) + '</b><p class="sub" style="margin-top:3px">' + esc(x.d) + '</p></div>').join("") + '</div>');
+
+  if(id === "nosay"){
+    const hier = (DB.rel.hierarchy || []).slice().sort((a,b)=> a.d - b.d);
+    return wrap(
+      '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Без «нет» любые отношения становятся опасными: ты не можешь влиять на то, как с тобой поступают. Отказ — это не разрыв связи, а условие, при котором связь выдерживает.</p></div>' +
+      '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Отказ в два шага</p>' +
+      '<div class="stack-s">' +
+      '<p class="sub"><b>1. Признай потребность другого.</b> «Я понимаю, что тебе это нужно», «Вижу, что для тебя это важно».</p>' +
+      '<p class="sub"><b>2. Назови своё предпочтение.</b> «Мне некомфортно», «Я бы предпочла», «Я не возьмусь».</p></div>' +
+      '<p class="tiny" style="margin-top:12px">С предпочтением невозможно спорить — это не аргумент, который можно опровергнуть. А вот длинные оправдания опасны: каждое из них противник разговора разберёт по косточкам и вернёт тебе как довод.</p></div>' +
+      '<p class="sect-title">Как это звучит</p>' +
+      NOSAY_EX.map(t => '<div class="quote" style="font-size:16px">' + esc(t) + '</div>').join("") +
+      '<p class="sect-title">Моя лестница отказов</p>' +
+      '<div class="card"><p class="tiny" style="margin-bottom:12px">Выпиши ситуации, где тебе трудно отказать, и оцени каждую по сложности. Тренируйся снизу вверх: первое «нет» должно быть лёгким, иначе сорвёшься и решишь, что не умеешь.</p>' +
+      (hier.length ? '<div class="stack-s" style="margin-bottom:12px">' + hier.map((x,i)=>
+        '<div class="row" style="gap:10px; align-items:flex-start">' +
+        '<span class="pill" style="flex:none; min-width:26px; justify-content:center">' + x.d + '</span>' +
+        '<span class="sub" style="flex:1">' + esc(x.t) + '</span>' +
+        '<button class="linkish" data-hrm="' + DB.rel.hierarchy.indexOf(x) + '" style="color:var(--danger); flex:none">убрать</button></div>').join("") + '</div>' : "") +
+      '<label class="field"><span>Ситуация</span><input type="text" id="h-text" placeholder="Например: отказать маме, когда просит приехать"></label>' +
+      '<div style="margin-top:12px"><p style="font-size:13.5px; font-weight:600; color:var(--ink-2); margin-bottom:6px">Насколько трудно — от 1 до 10</p>' +
+      '<div class="lv" style="flex-wrap:wrap">' + [1,2,3,4,5,6,7,8,9,10].map(n =>
+        '<button class="lv-b" data-hd="' + n + '" aria-pressed="' + (relDraftD === n) + '">' + n + '</button>').join("") + '</div></div>' +
+      '<button class="btn btn-block" data-hadd style="margin-top:12px">Добавить в лестницу</button></div>');
+  }
+
+  if(id === "resist") return wrap(
+    '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Что делать, когда ты сказал прямо, а тебя не услышали. Пять приёмов, которые не требуют повышать голос и не заканчиваются тем, что ты сдаёшься.</p></div>' +
+    RESIST.map((x,i) => '<div class="flip" data-open="0"><button data-flip>' +
+      '<span class="step-no" style="color:var(--b2); margin-right:2px">' + (i+1) + '</span><span>' + esc(x.t) + '</span>' +
+      '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>' +
+      '<div class="flip-body" hidden><p>' + esc(x.d) + '</p>' +
+      '<p style="font-family:var(--voice); font-size:15px; color:var(--ink)">' + esc(x.e) + '</p></div></div>').join(""));
+
+  if(id === "intensity"){
+    const u = DB.rel.urg, v = DB.rel.vul;
+    const sum = (u != null && v != null) ? (u + v) : null;
+    let verdict = "";
+    if(sum !== null){
+      if(sum >= 15) verdict = "Проси прямо и настойчиво. Скажи, что это важно, назови срок, при отказе повтори. Это тот случай, когда мягкость сыграет против тебя.";
+      else if(sum >= 9) verdict = "Проси спокойно и конкретно. Один раз назови, чего хочешь, дай человеку ответить, при отказе предложи компромисс.";
+      else verdict = "Проси мягко и без нажима. Сейчас важнее не продавить, а сохранить контакт — можно спросить, когда будет удобнее вернуться к этому.";
+    }
+    const scale = (path, cur, loL, hiL) =>
+      '<div class="lv" style="flex-wrap:wrap; margin:8px 0 6px">' + [1,2,3,4,5,6,7,8,9,10].map(n =>
+        '<button class="lv-b" data-rel="' + path + '" data-val="' + n + '" aria-pressed="' + (cur === n) + '">' + n + '</button>').join("") + '</div>' +
+      '<div class="row" style="justify-content:space-between"><span class="tiny">' + esc(loL) + '</span><span class="tiny">' + esc(hiL) + '</span></div>';
+    return wrap(
+      '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Насколько твёрдо просить — не черта характера, а расчёт по двум вопросам. Когда привычка колеблется между «промолчу» и «взорвусь», эти два вопроса возвращают выбор.</p></div>' +
+      '<div class="card"><p class="eyebrow">Насколько срочно мне это нужно</p>' + scale("urg", u, "подождёт", "очень срочно") + '</div>' +
+      '<div class="card"><p class="eyebrow">Насколько человек сейчас в порядке</p>' + scale("vul", v, "ему тяжело", "он в ресурсе") + '</div>' +
+      (sum !== null
+        ? '<div class="quote calm" style="font-size:16px"><b style="display:block; margin-bottom:8px; font-family:var(--sans); font-size:13px; letter-spacing:.08em; text-transform:uppercase">Сумма ' + sum + ' из 20</b>' + esc(verdict) + '</div>'
+        : '<p class="tiny" style="text-align:center">Отметь обе шкалы, чтобы увидеть вывод.</p>'));
+  }
+
+  if(id === "listen"){
+    const sel = DB.rel.listenBlocks || [];
+    return wrap(
+      '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Слушать — активное действие, а не пауза между своими репликами. Когда тебе страшно быть отвергнутым, слушать особенно трудно: внимание уходит на то, чтобы угадать, не разлюбили ли тебя, и на самого человека его не остаётся.</p></div>' +
+      '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Что спрашивать</p>' +
+      '<div class="stack-s">' + LISTEN_Q.map(q => '<p style="font-family:var(--voice); font-size:16px">' + esc(q) + '</p>').join("") + '</div>' +
+      '<p class="tiny" style="margin-top:12px">Узнать, что человеку нужно, — не то же самое, что пообещать это дать. Сначала понять, решать потом.</p></div>' +
+      '<p class="sect-title">Что мешает мне слышать</p>' +
+      '<div class="card"><p class="tiny" style="margin-bottom:12px">Отметь те, что узнаёшь за собой. Это не диагноз, а список того, за чем стоит понаблюдать на ближайшей неделе.</p>' +
+      '<div class="stack-s">' + LISTEN_BLOCKS.map(x =>
+        '<button class="check" data-lb="' + esc(x.t) + '" aria-pressed="' + (sel.indexOf(x.t)>=0) + '">' +
+        '<span class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span>' +
+        '<span><b style="font-size:14px">' + esc(x.t) + '</b><br><span class="tiny">' + esc(x.d) + '</span></span></button>').join("") + '</div></div>');
+  }
+
+  if(id === "selftest"){
+    const st = DB.rel.styleAnswers || [], sh = DB.rel.shouldAnswers || [];
+    const pas = st.filter(i => STYLE_TEST[i] && STYLE_TEST[i].k === "p").length;
+    const agr = st.filter(i => STYLE_TEST[i] && STYLE_TEST[i].k === "a").length;
+    let styleVerdict = "";
+    if(st.length >= 3){
+      if(pas > agr + 1) styleVerdict = "Преобладает пассивный стиль. В моменте уступить кажется безопаснее, но обида копится и однажды выходит взрывом или уходом. Тебе нужнее всего навык просьбы и отказа.";
+      else if(agr > pas + 1) styleVerdict = "Преобладает агрессивный стиль. За ним обычно стоит не сила, а страх, что иначе не услышат. Тебе нужнее всего модуляция интенсивности и признание чувств другого.";
+      else styleVerdict = "Стили примерно поровну — скорее всего, ты долго терпишь, а потом срываешься. Это один и тот же механизм: пассивность копит, агрессия сбрасывает. Работать стоит с ранним «нет», пока не накопилось.";
+    }
+    return wrap(
+      '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Три коротких теста. Результат никуда не уходит и никому не виден — он нужен только чтобы увидеть свой привычный рисунок.</p></div>' +
+
+      '<p class="sect-title">1 · Мой стиль</p>' +
+      '<div class="card"><p class="tiny" style="margin-bottom:12px">Вспомни последние разговоры с самыми близкими и отметь то, что похоже на тебя.</p>' +
+      '<div class="stack-s">' + STYLE_TEST.map((x,i) =>
+        '<button class="check" data-stq="' + i + '" aria-pressed="' + (st.indexOf(i)>=0) + '">' +
+        '<span class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span><span>' + esc(x.t) + '</span></button>').join("") + '</div>' +
+      (styleVerdict ? '<div class="quote calm" style="margin-top:14px; font-size:15.5px">' + esc(styleVerdict) + '</div>' : "") + '</div>' +
+
+      '<p class="sect-title">2 · Сколько во мне «я должен»</p>' +
+      '<div class="card"><p class="tiny" style="margin-bottom:12px">Отметь то, во что правда веришь — не то, что считаешь правильным на словах.</p>' +
+      '<div class="stack-s">' + SHOULD_TEST.map((t,i) =>
+        '<button class="check" data-shq="' + i + '" aria-pressed="' + (sh.indexOf(i)>=0) + '">' +
+        '<span class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span><span>' + esc(t) + '</span></button>').join("") + '</div>' +
+      (sh.length >= 1 ? '<div class="quote warm" style="margin-top:14px; font-size:15.5px">' +
+        'Отмечено ' + sh.length + ' из 10. ' +
+        (sh.length >= 7 ? 'Очень много. Такой набор убеждений почти не оставляет места вопросу «а чего хочу я» — и дальше отношения начинают ощущаться как долг, из которого хочется сбежать.'
+         : sh.length >= 4 ? 'Заметно. Ценить отношения — нормально. Вопрос в том, можешь ли ты при этом спросить себя, чего хочешь ты.'
+         : 'Немного. Похоже, ты умеешь считаться с собой.') + '</div>' : "") + '</div>' +
+
+      '<p class="sect-title">3 · Мне нужно — им нужно</p>' +
+      '<div class="card"><p class="tiny" style="margin-bottom:12px">Про конкретные отношения: насколько в них удовлетворены потребности каждого. Перекос в любую сторону делает связь неустойчивой.</p>' +
+      needsBlock() + '</div>');
+  }
 
   if(id === "wise") return wrap(
     '<div class="card"><svg viewBox="0 0 300 130" style="width:100%; height:auto; display:block" role="img" aria-label="Три круга: разум эмоций, мудрый разум на пересечении, разум рассудка">' +
@@ -1777,10 +2120,17 @@ function screenOnboarding(){
 
       '<div><p style="font-size:13.5px; font-weight:600; color:var(--ink-2); margin-bottom:7px">Род обращения</p>' +
       '<div class="seg-ctl">' +
-        '<button data-onbg="f" aria-pressed="' + (s.gender === "f") + '">Женский</button>' +
         '<button data-onbg="m" aria-pressed="' + (s.gender === "m") + '">Мужской</button>' +
+        '<button data-onbg="f" aria-pressed="' + (s.gender === "f") + '">Женский</button>' +
       '</div>' +
-      '<p class="tiny" style="margin-top:8px">От этого зависит, как звучат фразы протокола: «я взрослая» или «я взрослый». Поменять можно в любой момент в настройках.</p></div>' +
+      '<p class="tiny" style="margin-top:8px">От этого зависит, как звучат фразы протокола: «я взрослый» или «я взрослая». Поменять можно в любой момент в настройках.</p></div>' +
+
+      '<div><p style="font-size:13.5px; font-weight:600; color:var(--ink-2); margin-bottom:7px">Блок с молитвой</p>' +
+      '<div class="seg-ctl">' +
+        '<button data-onbp="1" aria-pressed="' + (s.prayer !== false) + '">Нужен</button>' +
+        '<button data-onbp="0" aria-pressed="' + (s.prayer === false) + '">Не нужен</button>' +
+      '</div>' +
+      '<p class="tiny" style="margin-top:8px">В протоколе есть шаг 2.5 — молитва от вины и стыда. Если это не твоё, шаг просто не будет появляться. Текст можно заменить на любой свой в настройках.</p></div>' +
     '</div></div>' +
 
     '<div class="quote calm" id="onbPreview" style="font-size:16px">' + esc(T.anchor) + '</div>' +
@@ -1798,8 +2148,8 @@ function screenSettings(){
   return '<div class="stack" style="padding-top:8px">' +
     '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Род обращения</p>' +
     '<p class="tiny" style="margin-bottom:10px">Фразы протокола написаны в женском роде. Здесь можно переключить.</p>' +
-    '<div class="seg-ctl"><button data-set="gender" data-val="f" aria-pressed="' + (s.gender==="f") + '">Женский</button>' +
-    '<button data-set="gender" data-val="m" aria-pressed="' + (s.gender==="m") + '">Мужской</button></div>' +
+    '<div class="seg-ctl"><button data-set="gender" data-val="m" aria-pressed="' + (s.gender==="m") + '">Мужской</button>' +
+    '<button data-set="gender" data-val="f" aria-pressed="' + (s.gender==="f") + '">Женский</button></div>' +
     '<div class="quote calm" style="margin-top:12px; font-size:15.5px">' + esc(T.anchor) + '</div></div>' +
 
     '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Имя и возраст</p>' +
@@ -1814,9 +2164,17 @@ function screenSettings(){
     '<p class="tiny" style="margin-top:8px">Можно поставить имя, которым тебя звали в детстве.</p></div>' +
 
     '<div class="card"><div class="row"><div style="flex:1"><p class="eyebrow" style="margin-bottom:4px">Блок 2.5 — молитва</p>' +
-    '<p class="tiny">Показывать шаг с молитвой в протоколе</p></div>' +
+    '<p class="tiny">Показывать шаг с молитвой в протоколе и практику</p></div>' +
     '<button class="check" data-set="prayer" data-val="toggle" aria-pressed="' + (!!s.prayer) + '" style="width:auto; background:none; border:none; padding:0">' +
-    '<span class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span></button></div></div>' +
+    '<span class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span></button></div>' +
+    (s.prayer ? '<div class="stack" style="margin-top:16px">' +
+      '<p class="tiny">Можно заменить на любой свой текст — другую молитву, строчку из стихотворения, слова близкого человека. Оставишь поля пустыми — останется исходный.</p>' +
+      '<label class="field"><span>Полный текст</span>' +
+      '<textarea id="prayerText" data-setinput="prayerText" placeholder="' + esc(T.prayerDefault) + '" style="min-height:120px">' + esc(s.prayerText||"") + '</textarea></label>' +
+      '<label class="field"><span>Короткий текст</span>' +
+      '<textarea id="prayerShortText" data-setinput="prayerShortText" placeholder="' + esc(T.prayerShortDefault) + '" style="min-height:64px">' + esc(s.prayerShortText||"") + '</textarea></label>' +
+      ((s.prayerText||s.prayerShortText) ? '<button class="linkish" data-prayerreset style="text-align:left">Вернуть исходный текст</button>' : "") +
+      '</div>' : "") + '</div>' +
 
     '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Свои фразы-якоря</p>' +
     (s.anchors.length ? '<div class="stack-s" style="margin-bottom:10px">' + s.anchors.map((a,i)=>
@@ -1845,7 +2203,7 @@ function screenSettings(){
 /* ============================================================
    РЕНДЕР И НАВИГАЦИЯ
    ============================================================ */
-const TITLES = { home:"Я с собой", wizard:"Протокол", diary:"Дневник", entry:"Запись", tools:"Практики", tool:"", progress:"Прогресс", settings:"Настройки", daily:"Как прошёл день", support:"Карточка поддержки" };
+const TITLES = { home:"Я с собой", wizard:"Протокол", diary:"Дневник", entry:"Запись", tools:"Практики", tool:"", progress:"Прогресс", settings:"Настройки", daily:"Как прошёл день", support:"Карточка поддержки", chain:"Цепочка" };
 let lastRenderKey = "";
 const scrollMem = {};   // где человек остановился на каждом экране
 function render(){
@@ -1878,6 +2236,7 @@ function render(){
   else if(view.name === "settings") html = screenSettings();
   else if(view.name === "daily") html = screenDaily();
   else if(view.name === "support") html = screenSupport();
+  else if(view.name === "chain") html = screenChain();
   root.innerHTML = html;
 
   const tool = TOOLS.find(t=>t.id===view.param);
@@ -1941,11 +2300,12 @@ function initTelegram(){
 }
 function go(name, param){
   if(name !== "daily") dayDraft = null;
+  if(name !== "chain") chainDraft = null;
   view.name = name; view.param = param || null;
   if(["home","diary","tools","progress"].indexOf(name) >= 0) view.tab = name;
   else if(name === "wizard" || name === "entry") view.tab = name === "entry" ? "diary" : "home";
   else if(name === "tool") view.tab = "tools";
-  else if(name === "daily") view.tab = "diary";
+  else if(name === "daily" || name === "chain") view.tab = "diary";
   render();
 }
 function leaveWizard(then){
@@ -1957,7 +2317,7 @@ function back(){
   if(view.name === "wizard") return leaveWizard(()=>go("home"));
   if(view.name === "entry") return go("diary");
   if(view.name === "tool") return go("tools");
-  if(view.name === "daily") return go("diary");
+  if(view.name === "daily" || view.name === "chain") return go("diary");
   if(view.name === "support") return go("home");
   if(view.name === "settings") return go(view.tab);
   go("home");
@@ -2070,7 +2430,10 @@ document.addEventListener("click", (ev)=>{
     "[data-addanchor],[data-rmanchor],[data-addreturn],[data-rmreturn]," +
     "[data-day],[data-dtab],[data-emo],[data-dchips],[data-dset],[data-dsave],[data-ddel]," +
     "[data-supadd],[data-suprm],[data-askbuild],[data-askcopy]," +
-    "[data-onbg],[data-onbdone],[data-onbskip],[data-onbagain]," +
+    "[data-onbg],[data-onbp],[data-onbdone],[data-onbskip],[data-onbagain],[data-prayerreset]," +
+    "[data-hd],[data-hadd],[data-hrm],[data-rel],[data-lb],[data-stq],[data-shq]," +
+    "[data-nsc],[data-nadd],[data-nrm]," +
+    "[data-chain],[data-ck],[data-cladd],[data-clrm],[data-cchips],[data-cweak],[data-csave],[data-cdel]," +
     "#bStart,#backBtn,#settingsBtn");
   if(!t) return;
 
@@ -2086,6 +2449,17 @@ document.addEventListener("click", (ev)=>{
     const prev = document.getElementById("onbPreview");
     if(prev) prev.textContent = T.anchor;   // фраза сразу меняется — видно, на что влияет выбор
     return;
+  }
+  if(t.dataset.onbp !== undefined && t.hasAttribute("data-onbp")){
+    DB.settings.prayer = t.dataset.onbp === "1";
+    haptic("select");
+    document.querySelectorAll("[data-onbp]").forEach(b=>
+      b.setAttribute("aria-pressed", String((b.dataset.onbp === "1") === DB.settings.prayer)));
+    return;
+  }
+  if(t.hasAttribute("data-prayerreset")){
+    DB.settings.prayerText = ""; DB.settings.prayerShortText = "";
+    save(); toast("Вернул исходный текст"); render(); return;
   }
   if(t.hasAttribute("data-onbdone") || t.hasAttribute("data-onbskip")){
     if(t.hasAttribute("data-onbdone")){
@@ -2156,6 +2530,116 @@ document.addEventListener("click", (ev)=>{
     return;
   }
 
+  /* ---- отношения ---- */
+  if(t.dataset.hd !== undefined && t.hasAttribute("data-hd")){
+    relDraftD = (relDraftD === +t.dataset.hd) ? null : +t.dataset.hd;
+    haptic("select");
+    document.querySelectorAll("[data-hd]").forEach(b=> b.setAttribute("aria-pressed", String(+b.dataset.hd === relDraftD)));
+    return;
+  }
+  if(t.hasAttribute("data-hadd")){
+    const inp = document.getElementById("h-text"), v = (inp.value||"").trim();
+    if(!v){ toast("Опиши ситуацию"); return; }
+    if(relDraftD == null){ toast("Оцени сложность от 1 до 10"); return; }
+    DB.rel.hierarchy.push({ t:v, d:relDraftD });
+    relDraftD = null; save(); render(); return;
+  }
+  if(t.dataset.hrm !== undefined && t.hasAttribute("data-hrm")){ DB.rel.hierarchy.splice(+t.dataset.hrm,1); save(); render(); return; }
+  if(t.dataset.rel){
+    const f = t.dataset.rel, v = +t.dataset.val;
+    DB.rel[f] = (DB.rel[f] === v) ? null : v;
+    save(); haptic("select"); render(); return;
+  }
+  if(t.dataset.lb){
+    toggleIn(DB.rel, "listenBlocks", t.dataset.lb);
+    save(); haptic("select");
+    t.setAttribute("aria-pressed", String((DB.rel.listenBlocks||[]).indexOf(t.dataset.lb) >= 0));
+    return;
+  }
+  if(t.dataset.stq !== undefined && t.hasAttribute("data-stq")){
+    toggleIn(DB.rel, "styleAnswers", +t.dataset.stq);
+    save(); haptic("select"); render(); return;
+  }
+  if(t.dataset.shq !== undefined && t.hasAttribute("data-shq")){
+    toggleIn(DB.rel, "shouldAnswers", +t.dataset.shq);
+    save(); haptic("select"); render(); return;
+  }
+  if(t.dataset.nsc){
+    const f = t.dataset.nsc, v = +t.dataset.val;
+    if(f === "mine") relDraftMine = (relDraftMine === v) ? null : v;
+    else relDraftTheirs = (relDraftTheirs === v) ? null : v;
+    haptic("select");
+    document.querySelectorAll('[data-nsc="' + f + '"]').forEach(b=>
+      b.setAttribute("aria-pressed", String(+b.dataset.val === (f === "mine" ? relDraftMine : relDraftTheirs))));
+    return;
+  }
+  if(t.hasAttribute("data-nadd")){
+    const who = (document.getElementById("n-who").value||"").trim();
+    if(!who){ toast("Укажи, с кем эти отношения"); return; }
+    if(relDraftMine == null || relDraftTheirs == null){ toast("Отметь обе шкалы"); return; }
+    DB.rel.needs.push({ who, mine:relDraftMine, theirs:relDraftTheirs });
+    relDraftMine = relDraftTheirs = null; save(); render(); return;
+  }
+  if(t.dataset.nrm !== undefined && t.hasAttribute("data-nrm")){ DB.rel.needs.splice(+t.dataset.nrm,1); save(); render(); return; }
+
+  /* ---- поведенческий анализ ---- */
+  if(t.dataset.chain !== undefined && t.hasAttribute("data-chain")){
+    chainDraft = null; return go("chain", t.dataset.chain || null);
+  }
+  if(t.dataset.ck){
+    chainKind = t.dataset.ck; haptic("select");
+    document.querySelectorAll("[data-ck]").forEach(b=> b.setAttribute("aria-pressed", String(b.dataset.ck === chainKind)));
+    return;
+  }
+  if(t.hasAttribute("data-cladd")){
+    if(!chainDraft) return;
+    const inp = document.getElementById("c-link"), v = (inp.value||"").trim();
+    if(!v){ toast("Напиши, что было дальше"); return; }
+    chainDraft.links.push({ kind:chainKind, text:v });
+    render(); return;
+  }
+  if(t.dataset.clrm !== undefined && t.hasAttribute("data-clrm")){
+    if(!chainDraft) return;
+    const i = +t.dataset.clrm;
+    chainDraft.links.splice(i,1);
+    if(chainDraft.weakIdx === i) chainDraft.weakIdx = null;
+    else if(chainDraft.weakIdx > i) chainDraft.weakIdx--;
+    render(); return;
+  }
+  if(t.dataset.cchips){
+    if(!chainDraft) return;
+    const arr = toggleIn(chainDraft, t.dataset.cchips, t.dataset.val);
+    haptic("select");
+    t.setAttribute("aria-pressed", String(arr.indexOf(t.dataset.val) >= 0));
+    return;
+  }
+  if(t.dataset.cweak !== undefined && t.hasAttribute("data-cweak")){
+    if(!chainDraft) return;
+    const i = +t.dataset.cweak;
+    chainDraft.weakIdx = (chainDraft.weakIdx === i) ? null : i;
+    haptic("select");
+    document.querySelectorAll("[data-cweak]").forEach(b=>
+      b.setAttribute("aria-pressed", String(+b.dataset.cweak === chainDraft.weakIdx)));
+    return;
+  }
+  if(t.hasAttribute("data-csave")){
+    if(!chainDraft) return;
+    if(!(chainDraft.target||"").trim() && !chainDraft.links.length){ toast("Заполни хотя бы то, что разбираешь"); return; }
+    chainDraft.updatedAt = Date.now();
+    const i = DB.chains.findIndex(x => x.id === chainDraft.id);
+    if(i >= 0) DB.chains[i] = JSON.parse(JSON.stringify(chainDraft));
+    else DB.chains.unshift(JSON.parse(JSON.stringify(chainDraft)));
+    save(); flushSave();
+    chainDraft = null; diaryTab = "chains";
+    toast("Разбор сохранён"); go("diary"); return;
+  }
+  if(t.dataset.cdel){
+    const id = t.dataset.cdel;
+    modal({ title:"Удалить разбор?", text:"Восстановить его будет нельзя.", okLabel:"Удалить", danger:true,
+      onOk:()=>{ DB.chains = DB.chains.filter(x=>x.id!==id); save(); chainDraft = null; diaryTab = "chains"; toast("Разбор удалён"); go("diary"); } });
+    return;
+  }
+
   /* ---- карточка поддержки ---- */
   if(t.dataset.supadd){
     const f = t.dataset.supadd, inp = document.getElementById("sup-" + f);
@@ -2168,13 +2652,15 @@ document.addEventListener("click", (ev)=>{
   /* ---- конструктор просьбы ---- */
   if(t.hasAttribute("data-askbuild")){
     const v = (id)=> (document.getElementById("ask-" + id).value || "").trim();
-    const facts = v("facts"), feel = v("feel"), req = v("req"), gain = v("gain");
+    const facts = v("facts"), feel = v("feel"), req = v("req"), gain = v("gain"), self = v("self");
     if(!facts && !req){ toast("Заполни хотя бы факты и просьбу"); return; }
+    const cap = s => s.charAt(0).toUpperCase() + s.slice(1).replace(/\s*[.。]?\s*$/, "") + ".";
     const parts = [];
-    if(facts) parts.push(facts.replace(/\s*[.。]?\s*$/, "") + ".");
-    if(feel) parts.push(feel.charAt(0).toUpperCase() + feel.slice(1).replace(/\s*[.。]?\s*$/, "") + ".");
+    if(facts) parts.push(cap(facts));
+    if(feel) parts.push(cap(feel));
     if(req) parts.push("Я прошу: " + req.replace(/^\s*[А-ЯA-Z]/, c=>c.toLowerCase()).replace(/\s*[.。]?\s*$/, "") + ".");
-    if(gain) parts.push(gain.charAt(0).toUpperCase() + gain.slice(1).replace(/\s*[.。]?\s*$/, "") + ".");
+    if(gain) parts.push(cap(gain));
+    if(self) parts.push(cap(self));
     const out = document.getElementById("askOut");
     document.getElementById("askText").textContent = parts.join(" ");
     out.hidden = false;
@@ -2287,6 +2773,7 @@ document.addEventListener("input", (ev)=>{
   }
   if(el.dataset && el.dataset.setinput){ DB.settings[el.dataset.setinput] = el.value; save(); return; }
   if(el.hasAttribute("data-dnote") && dayDraft){ dayDraft.note = el.value; return; }
+  if(el.dataset && el.dataset.cf && chainDraft){ chainDraft[el.dataset.cf] = el.value; return; }
   if(el.hasAttribute("data-supreasons")){ DB.support.reasons = el.value; save(); return; }
 });
 
@@ -2305,6 +2792,8 @@ window.addEventListener("scroll", ()=>{
     DB.entries = Array.isArray(loaded.entries) ? loaded.entries : [];
     DB.days = (loaded.days && typeof loaded.days === "object") ? loaded.days : {};
     DB.support = Object.assign({}, DEFAULTS.support, loaded.support||{});
+    DB.chains = Array.isArray(loaded.chains) ? loaded.chains : [];
+    DB.rel = Object.assign({}, DEFAULTS.rel, loaded.rel||{});
     // у тех, кто уже пользовался приложением, знакомство не всплывает задним числом
     if(loaded.settings && loaded.settings.onboarded === undefined) DB.settings.onboarded = true;
   }
