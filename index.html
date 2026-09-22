@@ -359,6 +359,18 @@ label.field > span{display:block; font-size:13.5px; font-weight:600; color:var(-
 .step-hint{font-size:13.5px; color:var(--muted); line-height:1.5}
 .wiz-foot{display:flex; gap:10px; padding:4px 0; margin-top:26px}
 
+/* полоса с фразой-якорем в протоколе */
+.anchor-strip{
+  width:100%; display:flex; align-items:center; gap:11px; text-align:left;
+  background:var(--blue-tint); border:1px solid color-mix(in srgb, var(--blue) 22%, transparent);
+  border-radius:var(--r-m); padding:11px 13px; margin-top:12px;
+  transition:border-color .15s;
+}
+.anchor-strip:hover{border-color:var(--blue)}
+.anchor-strip > svg{width:17px; height:17px; flex:none; stroke:var(--blue); fill:none; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
+.anchor-strip .ph{flex:1; min-width:0; font-family:var(--voice); font-size:14.5px; line-height:1.45; color:var(--ink)}
+.anchor-strip .cnt{flex:none; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums}
+
 .quote{
   font-family:var(--voice); font-size:17.5px; line-height:1.6;
   background:var(--b2-soft); border-radius:var(--r-m); padding:18px 18px; color:var(--ink);
@@ -644,7 +656,8 @@ let Adapter = (TG && TG.CloudStorage && tgAtLeast("6.9")) ? CloudAdapter : Local
 
 /* ---------- СОСТОЯНИЕ ---------- */
 const DEFAULTS = {
-  settings:{ gender:"m", prayer:true, prayerText:"", prayerShortText:"", childName:"", anchors:[], returns:[], name:"", age:"", onboarded:false },
+  settings:{ gender:"m", prayer:true, prayerText:"", prayerShortText:"", childName:"",
+             anchors:[], anchorsOn:["a0","a3","a13"], returns:[], name:"", age:"", onboarded:false },
   entries:[],
   days:{},                                              // карточки дня: "2026-09-21" -> {...}
   support:{ signs:[], helps:[], people:[], reasons:"" },// карточка поддержки
@@ -747,6 +760,38 @@ const RETURNS = ["Стакан воды","Выйти на улицу на 5–10
 const BODY_AFTER = ["лёгкость","тепло","расслабление","дыхание ровнее","спокойствие","дрожь ушла","ком растворился","тяжесть осталась","тянущая боль","пустота","слёзы вышли","сонливость"];
 const KIND_SELF = ["Сказать себе спасибо","Тёплый душ","Чай и тишина","Лечь пораньше","Прогулка","Музыка","Полчаса ничего не делать","Записать, что справил(а)ся"];
 const KIND_OTHERS = ["Сказать тёплое слово","Спросить, как он(а)","Поблагодарить","Сделать маленькое дело для другого","Извиниться, если было за что"];
+/* ---- фразы-якоря ---- */
+/* Функция, а не массив: род обращения подставляется в момент показа. */
+function anchorLib(){
+  const fem = DB.settings.gender !== "m";
+  return [
+    {id:"a0",  gr:"Безопасность сейчас", t:T.anchor},
+    {id:"a1",  gr:"Безопасность сейчас", t:"Это чувство настоящее. Опасность — нет."},
+    {id:"a2",  gr:"Безопасность сейчас", t:"Мне сейчас ничего не угрожает. Это тело вспомнило старое."},
+    {id:"a3",  gr:"Пауза",               t:"Мне не нужно решать это прямо сейчас."},
+    {id:"a4",  gr:"Пауза",               t:"Сначала пауза. Решения потом."},
+    {id:"a5",  gr:"Пауза",               t:"Подожду двадцать минут и посмотрю, что от этого останется."},
+    {id:"a6",  gr:"Когда кажется, что бросают", t:"Его молчание — ещё не приговор мне."},
+    {id:"a7",  gr:"Когда кажется, что бросают", t:"Меня можно любить и когда я " + g("неудобная","неудобный") + "."},
+    {id:"a8",  gr:"Когда кажется, что бросают", t:"Мне больше не надо заслуживать. Я уже есть."},
+    {id:"a9",  gr:"Когда кажется, что бросают", t:"Если человек уходит, это и про него тоже, не только про меня."},
+    {id:"a10", gr:"Про себя",            t:"Я могу быть в контакте с собой, даже когда другой далеко."},
+    {id:"a11", gr:"Про себя",            t:"Я справлюсь за нас двоих — за себя " + (fem ? "сегодняшнюю и за ту маленькую" : "сегодняшнего и за того маленького") + "."},
+    {id:"a12", gr:"Про себя",            t:"Я не " + g("обязана","обязан") + " быть " + g("удобной","удобным") + ", чтобы остаться " + g("нужной","нужным") + "."},
+    {id:"a13", gr:"Про волну",           t:"Это пройдёт. Оно всегда проходило."},
+    {id:"a14", gr:"Про волну",           t:"Волна спадает сама, если её не кормить."},
+    {id:"a15", gr:"Про выбор",           t:"Я выбираю, а не реагирую."},
+    {id:"a16", gr:"Про выбор",           t:"Несделанное действие — это уже победа."},
+    {id:"a17", gr:"Про выбор",           t:"Я имею право попросить. И право услышать «нет»."},
+    {id:"a18", gr:"Про выбор",           t:"Моё чувство — сигнал, а не доказательство."}
+  ];
+}
+function activeAnchors(){
+  const on = DB.settings.anchorsOn || [];
+  const built = anchorLib().filter(a => on.indexOf(a.id) >= 0).map(a => a.t);
+  return built.concat((DB.settings.anchors || []).filter(x => (x||"").trim()));
+}
+
 /* ---- карточка дня ---- */
 const DAY_EMOTIONS = [
   {k:"anx", n:"Тревога"}, {k:"sad", n:"Печаль"}, {k:"ang", n:"Злость"},
@@ -1074,7 +1119,13 @@ const STEPS = [
       '<div class="card flat" style="background:var(--surface-2)"><p class="eyebrow" style="margin-bottom:8px">Заземление, 40 секунд</p>' +
       '<p class="sub">Поставь обе стопы на пол. Почувствуй пол под пятками, под подушечками, под каждым пальцем. Перенеси вес чуть вперёд, потом назад. Почувствуй, как таз опирается на стул или на ноги. Пол держит. Тебя держат.</p></div>' +
       breathWidget() +
-      '<div class="quote calm">' + esc(T.anchor) + '</div>' +
+      (function(){
+        const list = activeAnchors();
+        const arr = list.length ? list : [T.anchor];
+        return '<div><p class="eyebrow" style="margin-bottom:8px">Мои фразы-якоря</p>' +
+          arr.map(t => '<div class="quote calm" style="margin-bottom:8px">' + esc(t) + '</div>').join("") +
+          '<p class="tiny">Прочитай вслух ту, что сегодня попадает. Выбрать другие можно в практике «Фразы-якоря».</p></div>';
+      })() +
       checkList("b2.pauseDone", ["Заземлился(лась) через стопы и таз","Подышал(а) 4-6 или 4-8","Сказал(а) фразу-якорь"]) + '</div>' },
 
   { b:2, no:"2.2", title:"Признание боли", hint:"Не спорить с болью и не выгонять её. Назвать, откуда она.",
@@ -1240,7 +1291,7 @@ function screenHome(){
   const nm = (DB.settings.name || "").trim();
   let html = '<div class="stack" style="padding-top:6px">' +
     (nm ? '<p class="eyebrow" style="margin:2px 2px 0">' + esc(greet) + ", " + esc(nm) + '</p>' : "") +
-    '<div class="hero"><h2>' + esc(T.anchor) + '</h2>' +
+    '<div class="hero"><h2>' + esc(activeAnchors()[0] || T.anchor) + '</h2>' +
     '<p>Когда накрывает — не решай ничего. Сначала пауза, потом разбор.</p>' +
     '<button class="btn btn-lg" data-go="wizard">Пройти протокол</button></div>' +
 
@@ -1306,6 +1357,20 @@ function triggerLine(e){
   return tags.length ? tags.join(", ") : "Без описания";
 }
 
+/* Выбранные фразы идут через весь протокол. На шаге 2.1 полосы нет —
+   там сам шаг про фразу-якорь, и они показаны целиком. */
+let anchorIdx = 0;
+function anchorStrip(step){
+  if(step && step.no === "2.1") return "";
+  const list = activeAnchors();
+  if(!list.length) return "";
+  if(anchorIdx >= list.length) anchorIdx = 0;
+  return '<button class="anchor-strip" data-anchornext aria-label="Следующая фраза">' +
+    '<svg viewBox="0 0 24 24"><path d="M12 8v13M5 12a7 7 0 0 0 14 0"/><circle cx="12" cy="5" r="2.4"/></svg>' +
+    '<span class="ph" id="anchorPh">' + esc(list[anchorIdx]) + '</span>' +
+    (list.length > 1 ? '<span class="cnt" id="anchorCnt">' + (anchorIdx+1) + '/' + list.length + '</span>' : "") +
+    '</button>';
+}
 function screenWizard(){
   const steps = visibleSteps();
   const s = steps[stepIdx];
@@ -1317,7 +1382,8 @@ function screenWizard(){
     '<div class="row" style="margin:14px 0 6px">' +
       (blockName ? '<span class="pill b' + s.b + '">' + esc(blockName) + '</span>' : '<span class="pill">Начало</span>') +
       '<span style="flex:1"></span><span class="tiny">' + (stepIdx+1) + ' / ' + steps.length + '</span></div>' +
-    '<div class="step-card b' + s.b + '">' +
+    anchorStrip(s) +
+    '<div class="step-card b' + s.b + '" style="margin-top:14px">' +
       (s.no ? '<div class="step-no">' + esc(s.no) + '</div>' : "") +
       '<h2 class="step-title">' + esc(s.title) + '</h2>' +
       '<p class="step-hint">' + esc(s.hint) + '</p></div>' +
@@ -1705,13 +1771,38 @@ function screenTool(id){
     '<p class="tiny" style="margin-top:10px">Медленно, вслух или про себя. Задача не «успокоиться», а вернуться в комнату, где ты сейчас.</p></div>');
 
   if(id === "anchor"){
-    const extra = (DB.settings.anchors||[]);
-    return wrap('<div class="quote calm">' + esc(T.anchor) + '</div>' +
-      '<div class="quote">Это чувство настоящее. Опасность — нет.</div>' +
-      '<div class="quote">Мне не нужно решать это прямо сейчас.</div>' +
-      '<div class="quote">Я могу быть в контакте с собой, даже когда другой далеко.</div>' +
-      extra.map(a=>'<div class="quote calm">' + esc(a) + '</div>').join("") +
-      '<p class="tiny">Свои фразы можно добавить в настройках.</p>');
+    const lib = anchorLib(), on = DB.settings.anchorsOn || [], own = DB.settings.anchors || [];
+    const chosen = activeAnchors();
+    const groups = [];
+    lib.forEach(a => {
+      let gr = groups.find(x => x.n === a.gr);
+      if(!gr){ gr = {n:a.gr, items:[]}; groups.push(gr); }
+      gr.items.push(a);
+    });
+    return wrap(
+      '<div class="card flat" style="background:var(--surface-2)"><p class="sub">Фраза-якорь работает не смыслом, а повторением: в момент, когда думать нечем, она даёт готовый ответ вместо того, что подсовывает паника. Отметь те, что попадают именно в тебя, — они будут сопровождать тебя весь протокол.</p></div>' +
+
+      (chosen.length ? '<p class="sect-title">Выбрано сейчас</p>' +
+        chosen.map(t => '<div class="quote calm" style="font-size:16px">' + esc(t) + '</div>').join("")
+        : '<div class="quote warm" style="font-size:15.5px">Пока не выбрано ни одной. Отметь хотя бы одну ниже — в протоколе будет показываться она.</div>') +
+
+      groups.map(gr =>
+        '<p class="sect-title">' + esc(gr.n) + '</p>' +
+        '<div class="stack-s">' + gr.items.map(a =>
+          '<button class="check" data-anch="' + a.id + '" aria-pressed="' + (on.indexOf(a.id)>=0) + '">' +
+          '<span class="box"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span>' +
+          '<span style="font-family:var(--voice); font-size:15px; line-height:1.45">' + esc(a.t) + '</span></button>').join("") + '</div>'
+      ).join("") +
+
+      '<p class="sect-title">Мои фразы</p>' +
+      '<div class="card">' +
+      (own.length ? '<div class="stack-s" style="margin-bottom:12px">' + own.map((a,i)=>
+        '<div class="row" style="gap:8px; align-items:flex-start">' +
+        '<span style="flex:1; font-family:var(--voice); font-size:15px; line-height:1.45">' + esc(a) + '</span>' +
+        '<button class="linkish" data-rmanchor="' + i + '" style="color:var(--danger); flex:none">убрать</button></div>').join("") + '</div>' : "") +
+      '<p class="tiny" style="margin-bottom:10px">Своя фраза почти всегда сильнее готовой. Это может быть то, что сказал тебе близкий человек, строчка из песни или то, что ты хотел бы услышать в детстве.</p>' +
+      '<div class="row" style="gap:8px"><input type="text" id="newAnchor" placeholder="Своя фраза, которая держит">' +
+      '<button class="btn" data-addanchor style="flex:none">Добавить</button></div></div>');
   }
   if(id === "urge") return wrap(
     '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Волна</p>' +
@@ -2176,11 +2267,9 @@ function screenSettings(){
       ((s.prayerText||s.prayerShortText) ? '<button class="linkish" data-prayerreset style="text-align:left">Вернуть исходный текст</button>' : "") +
       '</div>' : "") + '</div>' +
 
-    '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Свои фразы-якоря</p>' +
-    (s.anchors.length ? '<div class="stack-s" style="margin-bottom:10px">' + s.anchors.map((a,i)=>
-      '<div class="row" style="gap:8px"><span class="sub" style="flex:1">' + esc(a) + '</span>' +
-      '<button class="linkish" data-rmanchor="' + i + '" style="color:var(--danger)">убрать</button></div>').join("") + '</div>' : "") +
-    '<div class="row" style="gap:8px"><input type="text" id="newAnchor" placeholder="Своя фраза, которая держит"><button class="btn" data-addanchor>Добавить</button></div></div>' +
+    '<div class="card"><p class="eyebrow" style="margin-bottom:6px">Фразы-якоря</p>' +
+    '<p class="tiny" style="margin-bottom:12px">Выбрано: ' + activeAnchors().length + '. Они показываются на каждом шаге протокола.</p>' +
+    '<button class="btn btn-block" data-tool="anchor">Выбрать фразы</button></div>' +
 
     '<div class="card"><p class="eyebrow" style="margin-bottom:10px">Свои пункты возвращения к жизни</p>' +
     (s.returns.length ? '<div class="stack-s" style="margin-bottom:10px">' + s.returns.map((a,i)=>
@@ -2431,6 +2520,7 @@ document.addEventListener("click", (ev)=>{
     "[data-day],[data-dtab],[data-emo],[data-dchips],[data-dset],[data-dsave],[data-ddel]," +
     "[data-supadd],[data-suprm],[data-askbuild],[data-askcopy]," +
     "[data-onbg],[data-onbp],[data-onbdone],[data-onbskip],[data-onbagain],[data-prayerreset]," +
+    "[data-anch],[data-anchornext]," +
     "[data-hd],[data-hadd],[data-hrm],[data-rel],[data-lb],[data-stq],[data-shq]," +
     "[data-nsc],[data-nadd],[data-nrm]," +
     "[data-chain],[data-ck],[data-cladd],[data-clrm],[data-cchips],[data-cweak],[data-csave],[data-cdel]," +
@@ -2719,6 +2809,20 @@ document.addEventListener("click", (ev)=>{
 
   if(t.dataset.set === "gender"){ DB.settings.gender = t.dataset.val; save(); render(); return; }
   if(t.dataset.set === "prayer"){ DB.settings.prayer = !DB.settings.prayer; save(); render(); return; }
+  if(t.dataset.anch){
+    toggleIn(DB.settings, "anchorsOn", t.dataset.anch);
+    save(); haptic("select"); anchorIdx = 0; render(); return;
+  }
+  if(t.hasAttribute("data-anchornext")){
+    const list = activeAnchors();
+    if(list.length < 2) return;
+    anchorIdx = (anchorIdx + 1) % list.length;
+    haptic("select");
+    const ph = document.getElementById("anchorPh"), cnt = document.getElementById("anchorCnt");
+    if(ph) ph.textContent = list[anchorIdx];
+    if(cnt) cnt.textContent = (anchorIdx+1) + "/" + list.length;
+    return;
+  }
   if(t.hasAttribute("data-addanchor")){
     const inp = document.getElementById("newAnchor"); const v = inp.value.trim();
     if(v){ DB.settings.anchors.push(v); save(); render(); } return;
@@ -2796,6 +2900,7 @@ window.addEventListener("scroll", ()=>{
     DB.rel = Object.assign({}, DEFAULTS.rel, loaded.rel||{});
     // у тех, кто уже пользовался приложением, знакомство не всплывает задним числом
     if(loaded.settings && loaded.settings.onboarded === undefined) DB.settings.onboarded = true;
+    if(!Array.isArray(DB.settings.anchorsOn)) DB.settings.anchorsOn = DEFAULTS.settings.anchorsOn.slice();
   }
   // Убираем демонстрационную запись, если она осталась от предыдущей версии.
   const n = DB.entries.length;
