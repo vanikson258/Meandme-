@@ -10,6 +10,9 @@
 import asyncio
 import logging
 import os
+from datetime import datetime, timedelta
+from datetime import time as dtime
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -36,6 +39,17 @@ if not BOT_TOKEN or not WEBAPP_URL:
 
 if not WEBAPP_URL.startswith("https://"):
     raise SystemExit("WEBAPP_URL должен начинаться с https:// — Telegram не откроет http.")
+
+# Ежедневное напоминание партнёру. Если PARTNER_CHAT_ID не задан — функция выключена.
+PARTNER_CHAT_ID = os.environ.get("PARTNER_CHAT_ID")
+PARTNER_REMINDER_TEXT = os.environ.get(
+    "PARTNER_REMINDER_TEXT", "💊 Напоминание: выпей таблетку Ярина"
+)
+REMINDER_TZ = ZoneInfo("Europe/Moscow")
+REMINDER_AT = dtime(20, 0)
+
+if PARTNER_CHAT_ID and not PARTNER_CHAT_ID.lstrip("-").isdigit():
+    raise SystemExit("PARTNER_CHAT_ID должен быть числом (Telegram ID, например 123456789).")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -112,6 +126,22 @@ async def fallback(message: Message) -> None:
     )
 
 
+async def daily_partner_reminder(chat_id: int) -> None:
+    """Каждый день в REMINDER_AT (по Москве) шлёт напоминание в чат партнёра.
+    Партнёр должен сам нажать /start у бота — Telegram не даёт боту писать первым."""
+    while True:
+        now = datetime.now(REMINDER_TZ)
+        target = datetime.combine(now.date(), REMINDER_AT, tzinfo=REMINDER_TZ)
+        if target <= now:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            await bot.send_message(chat_id, PARTNER_REMINDER_TEXT)
+            logging.info("Напоминание отправлено в чат %s", chat_id)
+        except Exception:
+            logging.exception("Не удалось отправить напоминание в чат %s", chat_id)
+
+
 async def main() -> None:
     await bot.set_my_commands(
         [
@@ -124,8 +154,16 @@ async def main() -> None:
     await bot.set_chat_menu_button(
         menu_button=MenuButtonWebApp(text="Я с собой", web_app=WebAppInfo(url=WEBAPP_URL))
     )
+    reminder_task = None
+    if PARTNER_CHAT_ID:
+        reminder_task = asyncio.create_task(daily_partner_reminder(int(PARTNER_CHAT_ID)))
+        logging.info("Ежедневное напоминание включено: %s по Москве", REMINDER_AT)
     logging.info("Бот запущен. Mini App: %s", WEBAPP_URL)
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if reminder_task:
+            reminder_task.cancel()
 
 
 if __name__ == "__main__":
